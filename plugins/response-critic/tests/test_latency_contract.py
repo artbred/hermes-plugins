@@ -49,15 +49,23 @@ def test_hard_deadline_returns_before_blocked_provider_and_ignores_late_rejectio
     finally:release.set()
 
 
-def test_abandoned_worker_capacity_fails_open_without_more_threads():
-    c=load();c._judge_slots.acquire();c._judge_slots.acquire()
+def test_abandoned_worker_guard_is_local_to_same_session_and_stage():
+    c=load();c._review_workers[('held-session','judge')]=object()
     c._judge_kimi=Mock()
+    token=c._review_session.set('held-session')
     t=time.monotonic()
     try:
         assert c._judge('draft','max','system')==(None,'none')
         assert time.monotonic()-t < .1
         c._judge_kimi.assert_not_called()
-    finally:c._judge_slots.release();c._judge_slots.release()
+    finally:c._review_session.reset(token)
+    c._judge_kimi=Mock(return_value={'passed':True,'feedback':''})
+    token=c._review_session.set('another-session')
+    try:
+        assert c._judge('draft','max','system')[1]=='kimi'
+        c._judge_kimi.assert_called_once()
+        assert set(c._review_workers)=={('held-session','judge')}
+    finally:c._review_session.reset(token)
 
 
 def test_quota_cooldown_skips_exhausted_primary_without_lowering_fallback_effort():

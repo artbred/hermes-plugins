@@ -59,7 +59,9 @@ _fallback_effort = DEFAULT_FALLBACK_EFFORT
 _review_budget_seconds = 300.0
 _provider_cooldown_seconds = 300.0
 _judge_deadline = contextvars.ContextVar('response_critic_deadline', default=None)
-_judge_slots = threading.BoundedSemaphore(2)
+_review_session = contextvars.ContextVar('response_critic_session', default=None)
+_review_workers = {}
+_review_workers_lock = threading.Lock()
 _provider_backoff = {}
 _provider_backoff_lock = threading.Lock()
 
@@ -695,16 +697,31 @@ def _judge_openrouter(user_message: str, effort: str, system: str):
         return _parse_verdict(resp.json()["choices"][0]["message"]["content"])
 
 
-def _bounded_result(callback, deadline, label):
+def _bounded_result(callback, deadline, label, *, session_id=None):
     """Bound caller wait; late inference results cannot issue a continuation.
 
-    Two slots bound abandoned network workers. On exhaustion/error/timeout fail
-    open, without queuing another model or touching the main agent.
+    One in-flight worker per session and review stage bounds abandoned work
+    locally. Independent sessions have independent capacity, with no profile-wide
+    cap. Same-session duplicate work/errors/timeouts fail open.
     """
     remaining = deadline - time.monotonic()
-    if remaining <= 0 or not _judge_slots.acquire(blocking=False):
-        logger.info("Critic: %s skipped (budget/capacity)", label)
+    if remaining <= 0:
+        logger.info("Critic: %s skipped (expired budget)", label)
         return None
+    # Missing IDs must not collapse unrelated CLI/tool callers into one bucket.
+    session = session_id or _review_session.get() or object()
+    key, marker = (session, label), object()
+    with _review_workers_lock:
+        if key in _review_workers:
+            logger.info("Critic: %s skipped (same-session worker still running)", label)
+            return None
+        _review_workers[key] = marker
+
+    def release():
+        with _review_workers_lock:
+            if _review_workers.get(key) is marker:
+                _review_workers.pop(key, None)
+
     done, result = threading.Event(), {}
     context = contextvars.copy_context()
 
@@ -716,13 +733,13 @@ def _bounded_result(callback, deadline, label):
             logger.warning("Critic: %s unavailable (%s)", label, type(exc).__name__)
         finally:
             _judge_deadline.reset(token)
-            _judge_slots.release()
+            release()
             done.set()
 
     try:
         threading.Thread(target=lambda: context.run(work), name="critic-bounded-review", daemon=True).start()
     except RuntimeError:
-        _judge_slots.release()
+        release()
         return None
     if not done.wait(max(0, deadline - time.monotonic())):
         logger.info("Critic: %s deadline reached; delivering without its verdict", label)
@@ -742,7 +759,7 @@ def _review_outcome(text, session_id, evidence):
     if not _outcome_review_enabled or _critic_mode != "active" or _outcome_review_mode != "active":
         return None
     deadline = min(_judge_deadline.get() or float('inf'), time.monotonic() + 8)
-    return _bounded_result(lambda: _review_outcome_impl(text, session_id, evidence), deadline, "outcome")
+    return _bounded_result(lambda: _review_outcome_impl(text, session_id, evidence), deadline, "outcome", session_id=session_id)
 
 
 def _judge_chain(user_message: str, effort: str, system: str):
@@ -964,9 +981,11 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
     system = _redact_for_review(system)
 
     token = _judge_deadline.set(review_started + _review_budget_seconds)
+    session_token = _review_session.set(session_id or None)
     try:
         verdict, judge_name = _judge(user_message, effort, system)
     finally:
+        _review_session.reset(session_token)
         _judge_deadline.reset(token)
     if not isinstance(verdict, dict):
         return None                        # fail open — never trap the turn

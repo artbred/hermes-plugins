@@ -8,7 +8,7 @@ A measured delegated batch lasted 1,584.531 seconds. Nine verifier log intervals
 
 ## Changes
 
-- `response-critic` 1.5.1: hard caller-wait deadline (default 300 seconds / five minutes) shared with active outcome review; at most two abandoned inference workers; no late inference verdict may request a continuation. Capacity exhaustion/errors/timeouts fail open.
+- `response-critic` 1.5.2: hard caller-wait deadline (default 300 seconds / five minutes) shared with active outcome review. In-flight guards are per session and stage, with no fixed profile-wide review cap. Independent chats start reviews concurrently; stuck work only suppresses duplicates within its own session/stage. Errors/timeouts retain fail-open behavior; late verdicts cannot request a continuation.
 - The supported global Hermes hook guard is 330 seconds, leaving headroom for the five-minute reviewer. It also applies to other bounded plugin hooks; no core source was modified.
 - The installed profile allows one critic correction rather than five. Correction generation is real agent work, not included in the inference-wait cap.
 - Auth/quota HTTP 401/403/429 causes a 300-second judge cooldown. The OpenRouter fallback retains maximum reasoning.
@@ -31,8 +31,14 @@ An isolated real OpenRouter Jev smoke test reviewed `Hi` / `Hello.` with no clai
 
 This is a nonblocking API integration check, not proof of model accuracy. Active outcome transformations remain in shadow/not enabled. The earlier 14-case evaluation and its abstentions are documented separately.
 
+## Parallel-session verification (1.5.2)
+
+Both full plugin suites: **239 passed in 3.34 seconds**. The seven new concurrency cases were also repeated three times successfully. Barrier-controlled synthetic providers exercised five and twelve full verifier callbacks simultaneously: every session reached inference before any provider was released, and every session received only its own correction feedback. Five concurrent cooperative outcome-tool dispatches also completed without an admission skip. Missing IDs, separate profile modules, stuck workers in another session/stage, thread-start cleanup and worker-key release are covered.
+
+These are execution/concurrency tests with synthetic provider verdicts, not five/twelve live billed model requests. Provider errors and the five-minute timeout can still abstain; another chat consuming a shared review slot cannot.
+
 ## Limits
 
 An active verifier intentionally differs from vanilla Hermes: it may request a bounded correction or apply existing duplicate-delivery protection. It cannot be both fully active and behaviorally identical. Off/shadow gate tests establish observer noninterference at the tested integration boundaries, not a guarantee for every future Hermes release.
 
-A hard review deadline bounds the caller's wait, not an in-flight HTTP request's lifetime. Transport timeouts remain and two worker slots bound abandoned requests; late results are ignored for delivery. Original tool execution, main-model generation, subagent jobs and a permitted corrected generation have their own durations. The gateway counter remains per-run and is not a total-job stopwatch.
+A hard review deadline bounds the caller's wait, not an in-flight HTTP request's lifetime. Transport timeouts remain; abandoned-worker guards are session/stage-local and late results are ignored for delivery. Original tool execution, main-model generation, subagent jobs and a permitted corrected generation have their own durations. The gateway counter remains per-run and is not a total-job stopwatch.

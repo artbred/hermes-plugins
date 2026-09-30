@@ -4,7 +4,7 @@ A shared repository for custom [Hermes Agent](https://github.com/NousResearch/he
 
 ## Plugins
 
-- [response-critic](plugins/response-critic/) **1.5.1** — bounded pre-delivery verification, optional cooperative outcome review, internal-notification guards and verified-note acknowledgments. Standalone judge chain: Kimi → OpenRouter Muse Spark Contributor at maximum reasoning.
+- [response-critic](plugins/response-critic/) **1.5.2** — bounded pre-delivery verification, optional cooperative outcome review, internal-notification guards and verified-note acknowledgments. Standalone judge chain: Kimi → OpenRouter Muse Spark Contributor at maximum reasoning.
 - [scenario-router](plugins/scenario-router/) **0.3.0** — outcome-only Jev reviewer, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
 
 ## Execution contract

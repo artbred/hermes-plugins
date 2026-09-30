@@ -5,7 +5,7 @@ A standalone Hermes plugin for bounded, pre-delivery verification. Install under
 It does not replace Hermes source, agent models, tool permissions, or gateway send methods.
 The original agent always runs with its normal toolset before outcome review.
 
-## Cooperative outcome review (1.5.1)
+## Cooperative outcome review (1.5.2)
 
 Settings live under `plugins.entries.response-critic.settings`:
 
@@ -70,8 +70,12 @@ The Contributor tier permits Meta to use prompts and outputs for model improveme
 Review sends redacted request, draft, and evidence text to external providers; enable
 this only where that privacy boundary is acceptable. Caller wait is capped by
 `review_budget_seconds` (default 300 seconds / five minutes), including active cooperative review.
-Late inference results cannot produce a continuation. Two slots bound abandoned
-network workers; saturation fails open instead of spawning unlimited workers.
+Late inference results cannot produce a continuation. In-flight worker guards
+are keyed by session and review stage, not a profile-wide slot limit. All eligible
+parallel sessions can start their own review; there is no fixed two/five-chat cap.
+A still-running worker blocks duplicate inference only in its own session/stage,
+not another chat or profile. Worker keys are released on completion/start failure.
+Missing session IDs receive unique buckets instead of sharing a default slot.
 Quota/auth HTTP 401/403/429 responses cool down that judge for
 `provider_cooldown_seconds` (default 300); reasoning remains `max` on OpenRouter.
 The installed profile permits one correction instead of five. This does not bound
