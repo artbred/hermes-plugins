@@ -1,0 +1,29 @@
+# Local credentials and runtime configuration
+.env
+.env.*
+!.env.example
+config.yaml
+config.yml
+auth.json
+*credentials*
+*secrets*
+*.key
+*.pem
+muse-code-sub.json
+# Conversation/memory/evaluation records: keep personal data out of public git
+logs/
+sessions/
+plugin-data/
+*.sqlite
+*.sqlite3
+*.db
+private/
+evaluation-results/
+# Python/runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.DS_Store
