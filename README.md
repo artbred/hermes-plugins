@@ -1,6 +1,8 @@
-# Hermes Outcome Plugins
+# Hermes Plugins
 
-Two custom Hermes Agent plugins, developed together:
+A shared repository for custom Hermes Agent plugins, with room for additional plugins.
+
+Initial plugins:
 
 - **response-critic** — pre-delivery verification and bounded corrections, with Kimi and OpenRouter fallback.
 - **scenario-router** — Jev-based review of completed agent outcomes, not pre-run task routing.
