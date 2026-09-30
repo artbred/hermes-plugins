@@ -103,5 +103,12 @@ def test_rejected_max_thinking_is_not_retried_without_reasoning(critic, monkeypa
     assert post.call_args.kwargs['json']['reasoning']['effort'] == 'max'
 
 
-def test_nominal_http_budgets_fit_hook_budget(critic):
-    assert critic.REQUEST_TIMEOUT + critic.OPENROUTER_TIMEOUT < 120
+def test_http_providers_share_five_minute_budget(critic):
+    assert critic._review_budget_seconds == 300
+    assert critic.REQUEST_TIMEOUT == 300
+    assert critic.OPENROUTER_TIMEOUT == 300
+    token = critic._judge_deadline.set(critic.time.monotonic() + 299)
+    try:
+        assert 298 < critic._request_timeout(critic.OPENROUTER_TIMEOUT) <= 299
+    finally:
+        critic._judge_deadline.reset(token)

@@ -1,5 +1,5 @@
 name: response-critic
-version: 1.5.0
+version: 1.5.1
 description: "Bounded pre-delivery verification with optional cooperative outcome review and async guards."
 author: Response Critic contributors
 kind: standalone

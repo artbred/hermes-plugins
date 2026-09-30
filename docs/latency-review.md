@@ -8,7 +8,8 @@ A measured delegated batch lasted 1,584.531 seconds. Nine verifier log intervals
 
 ## Changes
 
-- `response-critic` 1.5.0: hard caller-wait deadline (default 30 seconds) shared with active outcome review; at most two abandoned inference workers; no late inference verdict may request a continuation. Capacity exhaustion/errors/timeouts fail open.
+- `response-critic` 1.5.1: hard caller-wait deadline (default 300 seconds / five minutes) shared with active outcome review; at most two abandoned inference workers; no late inference verdict may request a continuation. Capacity exhaustion/errors/timeouts fail open.
+- The supported global Hermes hook guard is 330 seconds, leaving headroom for the five-minute reviewer. It also applies to other bounded plugin hooks; no core source was modified.
 - The installed profile allows one critic correction rather than five. Correction generation is real agent work, not included in the inference-wait cap.
 - Auth/quota HTTP 401/403/429 causes a 300-second judge cooldown. The OpenRouter fallback retains maximum reasoning.
 - `critic_mode: off` and `shadow` no longer mutate the private verification sentinel or perform inline judge calls. Asynchronous outcome observation is provided by the separate scenario plugin.

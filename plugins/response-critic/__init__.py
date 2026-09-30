@@ -27,8 +27,8 @@ logger = logging.getLogger("hermes.plugin.response_critic")
 
 DEFAULT_MAX_ITERATIONS = 5
 MIN_RESPONSE_CHARS = 30
-REQUEST_TIMEOUT = 25.0
-OPENROUTER_TIMEOUT = 80.0  # Leave room for maximum reasoning under the 120s hook budget.
+REQUEST_TIMEOUT = 300.0
+OPENROUTER_TIMEOUT = 300.0  # Both providers share the five-minute caller deadline.
 
 # Doc extension on purpose: filtered by agent/verification_stop.py.
 SENTINEL = ".hermes/response-critic-gate.md"
@@ -56,7 +56,7 @@ _judge_base_url = DEFAULT_JUDGE_BASE_URL
 _fallback_model = DEFAULT_FALLBACK_MODEL
 _fallback_enabled = True
 _fallback_effort = DEFAULT_FALLBACK_EFFORT
-_review_budget_seconds = 30.0
+_review_budget_seconds = 300.0
 _provider_cooldown_seconds = 300.0
 _judge_deadline = contextvars.ContextVar('response_critic_deadline', default=None)
 _judge_slots = threading.BoundedSemaphore(2)
@@ -1008,10 +1008,10 @@ def register(ctx):
     global _plugin_context, _critic_mode, _outcome_review_enabled, _outcome_review_mode
     global _review_budget_seconds, _provider_cooldown_seconds
     _plugin_context = ctx
-    for name, default in (("review_budget_seconds", 30.0), ("provider_cooldown_seconds", 300.0)):
+    for name, default in (("review_budget_seconds", 300.0), ("provider_cooldown_seconds", 300.0)):
         try:
             value = float(ctx.get_config(name, default))
-            if not 1 <= value <= (120 if name == "review_budget_seconds" else 3600):
+            if not 1 <= value <= (300 if name == "review_budget_seconds" else 3600):
                 value = default
         except (TypeError, ValueError):
             value = default

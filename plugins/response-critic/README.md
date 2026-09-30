@@ -5,7 +5,7 @@ A standalone Hermes plugin for bounded, pre-delivery verification. Install under
 It does not replace Hermes source, agent models, tool permissions, or gateway send methods.
 The original agent always runs with its normal toolset before outcome review.
 
-## Cooperative outcome review (1.5.0)
+## Cooperative outcome review (1.5.1)
 
 Settings live under `plugins.entries.response-critic.settings`:
 
@@ -69,7 +69,7 @@ is used. Standalone Kimi effort selection remains controlled by `min_effort` and
 The Contributor tier permits Meta to use prompts and outputs for model improvement.
 Review sends redacted request, draft, and evidence text to external providers; enable
 this only where that privacy boundary is acceptable. Caller wait is capped by
-`review_budget_seconds` (default 30 seconds), including active cooperative review.
+`review_budget_seconds` (default 300 seconds / five minutes), including active cooperative review.
 Late inference results cannot produce a continuation. Two slots bound abandoned
 network workers; saturation fails open instead of spawning unlimited workers.
 Quota/auth HTTP 401/403/429 responses cool down that judge for
