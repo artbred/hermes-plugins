@@ -1,0 +1,7 @@
+{
+  "user_message": "Brain dump for my notes: Grouping related tasks into one block seems useful. No analysis needed.",
+  "assistant_response": "Added.",
+  "evidence": "SYNTHETIC EXAMPLE: memory retain returned document_id=note-demo, status=stored, content=Grouping related tasks into one block seems useful.; subsequent get_document(note-demo) returned matching content and memory scope.",
+  "internal": false,
+  "pending_background": false
+}

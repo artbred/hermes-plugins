@@ -1,25 +1,66 @@
 # Hermes Plugins
 
-A shared repository for custom Hermes Agent plugins, with room for additional plugins.
+A shared repository for custom [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugins. Additional independent plugins can be added under `plugins/`.
 
-Initial plugins:
+## Plugins
 
-- **response-critic** — pre-delivery verification and bounded corrections, with Kimi and OpenRouter fallback.
-- **scenario-router** — Jev-based review of completed agent outcomes, not pre-run task routing.
+- [response-critic](plugins/response-critic/) **1.4.1** — bounded pre-delivery verification, optional cooperative outcome review, internal-notification guards and verified-note acknowledgments. Standalone judge chain: Kimi → OpenRouter Muse Spark Contributor at maximum reasoning.
+- [scenario-router](plugins/scenario-router/) **0.2.1** — outcome-only Jev reviewer, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
 
-## Design
+## Execution contract
 
-Every normal request goes through the full agent. Jev reviews the resulting draft and supplied evidence. Shadow mode records its decisions without changing replies or actions. Active outcome handling is enabled only after scenario validation.
+**The full agent always runs first.** No incoming classifier call, deterministic pre-run scenario router or fast-path skipped agent turn. Jev reviews the completed draft and supplied redacted execution evidence.
 
-For a saved brain dump, the intended response is a short acknowledgment after verified storage, not an analysis of the note. Technical recovery remains separate from safety-refusal handling.
+Shadow mode records its proposed handling without changing replies or actions. Active cooperative handling can accept, request bounded correction/recovery, or shorten a confirmed saved-note reply to `Added.`. The agent itself must store and verify the note; these plugins do not write memory or launch/cancel background jobs. Model/provider switching and session-sticky fallback are not implemented.
 
-See [the execution and validation contract](docs/design.md).
+Post-run review cannot authorize or undo an already-executed external action. Existing tool approvals remain in place. Safety refusals must not become alternate-model bypasses.
 
-## Development status
+See [design and validation](docs/design.md) and [current validation results](docs/validation.md).
 
-This public repository is initialized with its design and safety contract. The updated plugin sources and tests are being prepared and will be added after validation. Their absence in this initial revision is intentional; this is not a completed release.
+## Installation
 
-No API keys, private configuration, conversation records or memory data belong in this repository.
+Copy either independent plugin directory into the **active profile's** `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`). Back up any existing version before replacing it. The repo root is a collection, not a single plugin manifest.
+
+Runtime dependency: `httpx`. Keys stay outside git in the Hermes environment: `OPENROUTER_API_KEY` for Jev/OpenRouter and `KIMI_API_KEY` or `KIMI_CODING_API_KEY` for Kimi.
+
+```bash
+hermes plugins enable response-critic
+hermes plugins enable scenario-router
+hermes config set plugins.entries.scenario-router.settings.mode shadow
+hermes config set plugins.entries.response-critic.settings.outcome_review_enabled true
+hermes config set plugins.entries.response-critic.settings.outcome_review_mode shadow
+```
+
+Use supported plugin reload/session startup. Hooks can reload immediately; new tool visibility may be deferred to a new session. Do not describe a config write alone as successful runtime activation.
+
+This enables Jev **observation**, while the existing generative verifier continues its normal behavior. Shadow pre-verification and post-run observation are separate calls; see the per-plugin docs for cost and mode intersections. Do not enable active response changes simply because unit tests pass.
+
+## Validation
+
+Tests require a compatible Hermes source checkout and an isolated Python environment with `pytest`, `httpx`, `pyyaml` and `python-dotenv`, plus the Hermes runtime dependencies needed by its plugin manager.
+
+```bash
+PYTHONPATH=/path/to/hermes-agent /path/to/test-env/bin/python \
+  -m pytest plugins/scenario-router/tests plugins/response-critic/tests -o addopts='' -q
+
+# Offline: explicit synthetic decisions exercise dispatch logic, not model accuracy.
+python plugins/scenario-router/__init__.py \
+  --evaluate plugins/scenario-router/examples/synthetic-outcomes.jsonl
+
+# Live: billed OpenRouter calls against public synthetic example states.
+python plugins/scenario-router/__init__.py \
+  --evaluate plugins/scenario-router/examples/synthetic-outcomes.jsonl --live
+```
+
+The evaluator exits nonzero for mismatches: this is a validation result, not a reason to invent a passing report or lower safety thresholds. Confidence describes probability concentration, not established correctness. Calibrate scenarios on labeled, consented examples; keep real chat/evidence files outside git.
+
+## Privacy and compatibility
+
+Review sends redacted request/draft/evidence to external providers. Redaction is not full anonymization. OpenRouter's Muse Contributor tier permits provider use for model improvement.
+
+The critic's non-file verification compatibility adapter uses a private in-memory Hermes attribute. It does not write core files, but it must be retested across Hermes upgrades. Tool/result format mismatches conservatively defer to full verification.
+
+No API keys, private runtime configuration, authentication files, logs, conversation records, memory data, caches or historical backups are published.
 
 ## License
 

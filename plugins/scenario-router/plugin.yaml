@@ -1,0 +1,41 @@
+name: scenario-router
+version: 0.2.1
+description: "Outcome-only Jev reviewer and shadow evaluation. Recommendations only; no pre-run routing."
+author: Artem
+kind: standalone
+provides_tools: [scenario_review_outcome]
+provides_hooks: [pre_llm_call, post_llm_call, post_tool_call, on_session_reset]
+config_schema:
+  mode:
+    type: str
+    choices: ['off', shadow, active]
+    default: shadow
+    description: "shadow observes final outcomes; active exposes cooperative reviewer only; off disables review. No mode executes recommendations."
+  judge_model:
+    type: str
+    default: typesafe/jev-1.13
+  timeout_seconds:
+    type: int
+    default: 8
+  max_input_characters:
+    type: int
+    default: 48000
+    description: "Abstain on oversized full state; never silently truncate notes or drafts."
+  confidence_threshold:
+    type: float
+    default: 0.90
+  brain_dump_threshold:
+    type: float
+    default: 0.97
+  max_cached_turns:
+    type: int
+    default: 128
+  max_review_history:
+    type: int
+    default: 64
+  max_tool_events:
+    type: int
+    default: 32
+  max_tool_characters:
+    type: int
+    default: 12000
