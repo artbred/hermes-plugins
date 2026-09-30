@@ -5,7 +5,7 @@ A standalone Hermes plugin for bounded, pre-delivery verification. Install under
 It does not replace Hermes source, agent models, tool permissions, or gateway send methods.
 The original agent always runs with its normal toolset before outcome review.
 
-## Cooperative outcome review (1.4.1)
+## Cooperative outcome review (1.5.0)
 
 Settings live under `plugins.entries.response-critic.settings`:
 
@@ -22,10 +22,10 @@ import scenario-router internals or issue a second direct classifier HTTP reques
 The arguments are `user_message`, `assistant_response`, `evidence`, `internal`, and
 `pending_background`. The tool may return a JSON string or a decoded object.
 
-- **Shadow:** observe and log validated disposition/confidence, then run the existing
-  Kimi critic identically, including its legacy trivial-reply and confirmed-handoff
-  skips. No new continuation, acknowledgment, tool action, or provider override is
-  applied from the outcome result. Existing internal-duplicate protection remains.
+- **Outcome shadow:** do not call Jev from the delivery-critical verification hook.
+  The scenario plugin observes asynchronously after the completed run. The active
+  standalone Kimi/OpenRouter critic keeps its own verification behavior; Jev never
+  changes delivery, requests a continuation or starts a new agent in shadow mode.
 - **Active:** application requires critic mode, local outcome-review mode, and the
   tool's returned mode all to be `active`, plus confidence of at least **0.97**.
   `accept` can skip full verification. `handoff` additionally requires actual
@@ -44,8 +44,9 @@ The arguments are `user_message`, `assistant_response`, `evidence`, `internal`, 
   to full maximum-effort verification in active cooperative mode. `refusal` never
   triggers recovery or alternate-provider bypass. Verifier availability failures
   retain the original fail-open behavior.
-- `critic_mode: shadow` observes full verdicts without applying continuations or
-  outcome acknowledgments. `critic_mode: off` skips review.
+- `critic_mode: shadow` and `off` perform no inline judge calls, continuations,
+  output rewrites or verification-sentinel mutations. Use the separate scenario
+  plugin for asynchronous shadow observation.
 
 This is an **outcome-only** integration. It does not short-circuit initial execution,
 store notes itself, classify requests before execution, limit the agent's tools,
@@ -67,9 +68,15 @@ is used. Standalone Kimi effort selection remains controlled by `min_effort` and
 
 The Contributor tier permits Meta to use prompts and outputs for model improvement.
 Review sends redacted request, draft, and evidence text to external providers; enable
-this only where that privacy boundary is acceptable. Kimi's HTTP timeout is 25 seconds
-and OpenRouter's is 80 seconds. Cooperative classification adds latency, so account
-for it in the operator's hook timeout; the plugin does not modify production settings.
+this only where that privacy boundary is acceptable. Caller wait is capped by
+`review_budget_seconds` (default 30 seconds), including active cooperative review.
+Late inference results cannot produce a continuation. Two slots bound abandoned
+network workers; saturation fails open instead of spawning unlimited workers.
+Quota/auth HTTP 401/403/429 responses cool down that judge for
+`provider_cooldown_seconds` (default 300); reasoning remains `max` on OpenRouter.
+The installed profile permits one correction instead of five. This does not bound
+the original agent's tool/model work or the time spent producing a corrected draft.
+Main-agent results cover subagents; duplicate child critic passes are skipped.
 
 ## Hooks and compatibility
 

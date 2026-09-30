@@ -4,8 +4,8 @@ A shared repository for custom [Hermes Agent](https://github.com/NousResearch/he
 
 ## Plugins
 
-- [response-critic](plugins/response-critic/) **1.4.1** — bounded pre-delivery verification, optional cooperative outcome review, internal-notification guards and verified-note acknowledgments. Standalone judge chain: Kimi → OpenRouter Muse Spark Contributor at maximum reasoning.
-- [scenario-router](plugins/scenario-router/) **0.2.1** — outcome-only Jev reviewer, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
+- [response-critic](plugins/response-critic/) **1.5.0** — bounded pre-delivery verification, optional cooperative outcome review, internal-notification guards and verified-note acknowledgments. Standalone judge chain: Kimi → OpenRouter Muse Spark Contributor at maximum reasoning.
+- [scenario-router](plugins/scenario-router/) **0.3.0** — outcome-only Jev reviewer, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
 
 ## Execution contract
 
@@ -29,11 +29,13 @@ hermes plugins enable scenario-router
 hermes config set plugins.entries.scenario-router.settings.mode shadow
 hermes config set plugins.entries.response-critic.settings.outcome_review_enabled true
 hermes config set plugins.entries.response-critic.settings.outcome_review_mode shadow
+hermes config set plugins.entries.response-critic.settings.max_iterations 1
+hermes config set plugins.entries.response-critic.settings.review_budget_seconds 30
 ```
 
 Use supported plugin reload/session startup. Hooks can reload immediately; new tool visibility may be deferred to a new session. Do not describe a config write alone as successful runtime activation.
 
-This enables Jev **observation**, while the existing generative verifier continues its normal behavior. Shadow pre-verification and post-run observation are separate calls; see the per-plugin docs for cost and mode intersections. Do not enable active response changes simply because unit tests pass.
+This enables asynchronous Jev **observation**, while the existing generative verifier continues its bounded behavior. Automatic shadow observation no longer dispatches a second inline cooperative call. See [latency and compatibility review](docs/latency-review.md) for budgets, noninterference tests and limits. Do not enable active outcome handling simply because unit tests pass.
 
 ## Validation
 

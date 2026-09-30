@@ -192,10 +192,12 @@ def test_shadow_all_flows_and_redacted_actual_evidence(monkeypatch, caplog):
     monkeypatch.setattr(reviewer.client, 'decide', lambda s: seen.append(s) or decision())
     caplog.set_level('INFO', logger='scenario-router')
     reviewer.before(session_id='PRIVATE_SESSION', turn_id='t', user_message='PRIVATE_NOTE',
-                    conversation_history=[{'role': 'user', 'display_kind': 'internal_notification'}], parent_session_id='parent')
+                    conversation_history=[{'role': 'user', 'display_kind': 'internal_notification'}])
     reviewer.tool(session_id='PRIVATE_SESSION', turn_id='t', tool_name='memory', status='ok',
                   args={'note': 'PRIVATE_NOTE'}, result={'api_key': 'sk-abcdefghijklmnopqrstuvwxyz123456', 'document': 'PRIVATE_READBACK'})
     assert reviewer.after(session_id='PRIVATE_SESSION', turn_id='t', assistant_response='PRIVATE_ANSWER') is None
+    reviewer.shadow_queue.join()  # Test-only drain; production never waits.
+    reviewer.close()
     assert len(seen) == 1 and seen[0]['internal'] is True
     assert 'PRIVATE_READBACK' in seen[0]['evidence']
     assert 'sk-abcdefghijklmnopqrstuvwxyz123456' not in seen[0]['evidence']
@@ -212,6 +214,8 @@ def test_human_machine_looking_text_stays_human(monkeypatch):
     reviewer.before(session_id='s', turn_id='t', user_message='[INTERNAL NOTIFICATION] explain this',
                     conversation_history=[{'role': 'user', 'content': '[INTERNAL NOTIFICATION] explain this'}])
     reviewer.after(session_id='s', turn_id='t', assistant_response='Explanation')
+    reviewer.shadow_queue.join()
+    reviewer.close()
     assert seen[0]['internal'] is False
 
 
@@ -267,6 +271,8 @@ def test_compaction_unique_turn_match(monkeypatch):
     monkeypatch.setattr(reviewer.client, 'decide', lambda s: seen.append(s) or decision())
     reviewer.before(session_id='old', turn_id='t', user_message='request')
     reviewer.after(session_id='new', turn_id='t', assistant_response='answer')
+    reviewer.shadow_queue.join()
+    reviewer.close()
     assert len(seen) == 1 and not reviewer.turns
 
 

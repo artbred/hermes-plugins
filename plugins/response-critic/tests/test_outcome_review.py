@@ -91,8 +91,14 @@ def test_never_applies_unless_all_modes_active(critic, critic_mode, local_mode, 
     ctx = connect(critic, envelope('correct', tool_mode, feedback='Mock outcome correction.'),
                   mode=local_mode, critic_mode=critic_mode)
     assert critic.validate_final_response(DRAFT, session_id='s') is None
-    ctx.dispatch_tool.assert_called_once()
-    critic._judge.assert_called_once()
+    if critic_mode == "active" and local_mode == "active":
+        ctx.dispatch_tool.assert_called_once()
+    else:
+        ctx.dispatch_tool.assert_not_called()
+    if critic_mode == "active":
+        critic._judge.assert_called_once()
+    else:
+        critic._judge.assert_not_called()
     assert not critic._acknowledgments
 
 

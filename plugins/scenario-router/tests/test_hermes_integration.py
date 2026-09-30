@@ -39,6 +39,7 @@ def test_real_plugin_manager_discovery_and_dispatch(tmp_path, monkeypatch, mode)
         manager.invoke_hook('post_tool_call', session_id='test-session', turn_id='test-turn', tool_name='terminal',
                             args={'command': 'test command'}, result='PRIVATE_TOOL_RESULT', status='ok')
         assert manager.invoke_hook('post_llm_call', session_id='test-session', turn_id='test-turn', assistant_response='PRIVATE_RESPONSE') == []
+        reviewer.shadow_queue.join()  # Only tests wait for the auxiliary observation.
         assert len(calls) == (1 if mode == 'shadow' else 0)
         entry = registry.get_entry('scenario_review_outcome', scope=str(home))
         assert entry is not None

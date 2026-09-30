@@ -9,6 +9,9 @@ import math
 import os
 import re
 import threading
+import queue
+import time
+import contextvars
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,7 @@ DEFAULTS = {
     'confidence_threshold': .90, 'brain_dump_threshold': .97,
     'max_cached_turns': 128, 'max_review_history': 64,
     'max_tool_events': 32, 'max_tool_characters': 12000,
+    'shadow_queue_size': 8, 'shadow_max_age_seconds': 30,
 }
 QUESTIONS = {
     'outcome': {
@@ -239,7 +243,7 @@ def settings(ctx=None) -> dict:
         raise ValueError('Invalid confidence threshold')
     if cfg['brain_dump_threshold'] < cfg['confidence_threshold']:
         raise ValueError('Brain-dump threshold cannot be weaker')
-    for k, low, high in [('timeout_seconds', 1, 30), ('max_input_characters', 1, 1000000), ('max_cached_turns', 1, 256), ('max_review_history', 1, 256), ('max_tool_events', 1, 64), ('max_tool_characters', 1, 48000)]:
+    for k, low, high in [('timeout_seconds', 1, 30), ('max_input_characters', 1, 1000000), ('max_cached_turns', 1, 256), ('max_review_history', 1, 256), ('max_tool_events', 1, 64), ('max_tool_characters', 1, 48000), ('shadow_queue_size', 1, 32), ('shadow_max_age_seconds', 1, 120)]:
         if type(cfg[k]) is not int or not low <= cfg[k] <= high:
             raise ValueError('Invalid bounded budget: ' + k)
     return cfg
@@ -275,6 +279,10 @@ class Reviewer:
     def __init__(self, ctx):
         self.ctx, self.cfg = ctx, settings(ctx)
         self.client = Jev(self.cfg)
+        self.state = ctx.state  # Resolve profile-owned storage before leaving hook context.
+        self.closed = threading.Event()
+        self.shadow_queue = queue.Queue(maxsize=self.cfg['shadow_queue_size'])
+        self.shadow_worker = None
         self.turns = OrderedDict()
         self.history = []
         self.lock = threading.RLock()
@@ -287,10 +295,12 @@ class Reviewer:
                   'ok': envelope['ok'], 'review': envelope['review'],
                   'answers': envelope['answers'], 'usage': envelope['usage']}
         with self.lock:
+            if self.closed.is_set():
+                return
             self.history.append(record)
             self.history = self.history[-self.cfg['max_review_history']:]
-            self.ctx.state.set('last_decision', record)
-            self.ctx.state.set('review_history', list(self.history))
+            self.state.set('last_decision', record)
+            self.state.set('review_history', list(self.history))
         LOG.info('scenario-router outcome %s', json.dumps(record, ensure_ascii=False, allow_nan=False))
 
     def review(self, state: dict, *, source='tool', session_id='', turn_id='') -> dict:
@@ -313,7 +323,7 @@ class Reviewer:
 
     def before(self, session_id='', turn_id='', user_message='', conversation_history=None, **kwargs):
         """Capture only. No Jev request, policy or injected context before agent run."""
-        if self.cfg['mode'] == 'off' or not session_id or not turn_id or not isinstance(user_message, str):
+        if self.cfg['mode'] == 'off' or kwargs.get('parent_session_id') or not session_id or not turn_id or not isinstance(user_message, str):
             return None
         rows = conversation_history or []
         current = next((r for r in reversed(rows) if isinstance(r, dict) and r.get('role') == 'user'), {})
@@ -371,11 +381,60 @@ class Reviewer:
                     entry = self.turns.pop(matches[0])
         if self.cfg['mode'] != 'shadow' or not entry or not isinstance(assistant_response, str):
             return None
-        self.review({'user_message': entry['user_message'], 'assistant_response': assistant_response,
+        self.enqueue_shadow({'user_message': entry['user_message'], 'assistant_response': assistant_response,
                      'evidence': '\n'.join(entry['tools']), 'internal': entry['internal'],
                      'pending_background': kwargs.get('pending_background', entry['pending_background']) is True},
-                    source='post_llm_shadow', session_id=session_id, turn_id=turn_id)
+                    session_id=session_id, turn_id=turn_id)
         return None  # Always observer-only: no rewrite, block, background control or nudge.
+
+    def enqueue_shadow(self, state, *, session_id='', turn_id=''):
+        """Capture-and-return: no API, new agent, delivery or continuation here."""
+        if self.closed.is_set():
+            return
+        job = (dict(state), session_id, turn_id, time.monotonic(), contextvars.copy_context())
+        try:
+            self.shadow_queue.put_nowait(job)
+        except queue.Full:
+            LOG.info('scenario-router shadow queue full; observation dropped')
+            return
+        with self.lock:
+            if self.shadow_worker is None:
+                self.shadow_worker = threading.Thread(target=self._shadow_loop, name='jev-shadow-review', daemon=True)
+                try:
+                    self.shadow_worker.start()
+                except RuntimeError:
+                    self.shadow_worker = None
+                    LOG.warning('scenario-router shadow worker unavailable')
+
+    def _shadow_loop(self):
+        while not self.closed.is_set():
+            try:
+                state, sid, tid, queued_at, context = self.shadow_queue.get(timeout=.1)
+            except queue.Empty:
+                continue
+            try:
+                if self.closed.is_set():
+                    return
+                if time.monotonic() - queued_at > self.cfg['shadow_max_age_seconds']:
+                    LOG.info('scenario-router stale shadow observation dropped')
+                    continue
+                context.run(self.review, state, source='post_llm_shadow', session_id=sid, turn_id=tid)
+            except Exception as exc:
+                LOG.warning('scenario-router shadow observation failed (%s)', type(exc).__name__)
+            finally:
+                self.shadow_queue.task_done()
+
+    def close(self):
+        """Do not join network work at unload; stale results must not persist."""
+        self.closed.set()
+        with self.lock:
+            self.turns.clear()
+        while True:
+            try:
+                self.shadow_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.shadow_queue.task_done()
 
     def reset(self, session_id='', old_session_id=None, **kwargs):
         with self.lock:
@@ -387,6 +446,8 @@ class Reviewer:
 
 def register(ctx):
     reviewer = Reviewer(ctx)
+    if hasattr(ctx, 'on_unload'):
+        ctx.on_unload(reviewer.close)
     ctx.register_tool(name=TOOL_NAME, toolset='scenario-review', schema=TOOL_SCHEMA,
                       handler=reviewer.handler, check_fn=lambda: reviewer.cfg['mode'] != 'off')
     ctx.register_hook('pre_llm_call', reviewer.before)

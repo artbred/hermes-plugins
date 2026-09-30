@@ -1,4 +1,4 @@
-# Scenario router v0.2.1: outcome-only Jev reviewer
+# Scenario router v0.3.0: outcome-only Jev reviewer
 
 The agent **always runs normally first**, including its own memory storage and
 readback. Jev then judges the outcome. There is no incoming scenario classifier,
@@ -132,8 +132,12 @@ max_tool_characters: 12000         # per-event evidence digest cap
 ```
 
 - `shadow` (default): `pre_llm_call` **captures only**, `post_tool_call`
-  collects redacted actual evidence, `post_llm_call` reviews the completed turn
-  and records metadata. Every hook returns `None`; no context injection,
+  collects redacted actual evidence, and `post_llm_call` enqueues observation then
+  returns without waiting for the API. One profile-scoped worker records metadata.
+  Queue size is bounded (default 8), observations older than 30 seconds are dropped,
+  unload closes the worker without waiting for HTTP and discards late results.
+  Child/subagent observations are skipped; the main result carries their evidence.
+  Every hook returns `None`; no context injection,
   delivered-text rewrite, agent nudge, verifier control, or background control.
   Explicit tool reviews also return `mode=shadow` and must remain observational.
 - `active`: explicit synchronous tool reviews are intended for an opt-in
@@ -143,10 +147,11 @@ max_tool_characters: 12000         # per-event evidence digest cap
   unavailable/uncertain envelope without a Jev request. Disabled plugin vs
   enabled plugin in off mode are distinct.
 
-No decision cache is shared between hooks and tool calls. In shadow mode,
-**one explicit tool review plus one post-LLM review makes two independent Jev
-requests**. Repeated explicit tool calls make repeated requests. A pre-run
-capture never requests Jev. Evidence from the review tool itself is excluded.
+No decision cache is shared between hooks and explicit tool calls. The critic
+does not dispatch the outcome tool in shadow mode, avoiding a duplicate inline
+request. An operator's explicit tool review still makes a separate synchronous
+request; automatic shadow observation is asynchronous and never starts an agent.
+A pre-run capture never requests Jev. Reviewer output is excluded from evidence.
 
 Internal notification status comes from trusted current history metadata
 (`display_kind=internal_notification` or host verifier-nudge flags), not matching

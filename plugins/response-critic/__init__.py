@@ -19,6 +19,8 @@ import logging
 import logging.handlers
 import datetime
 import threading
+import time
+import contextvars
 import httpx
 
 logger = logging.getLogger("hermes.plugin.response_critic")
@@ -54,6 +56,27 @@ _judge_base_url = DEFAULT_JUDGE_BASE_URL
 _fallback_model = DEFAULT_FALLBACK_MODEL
 _fallback_enabled = True
 _fallback_effort = DEFAULT_FALLBACK_EFFORT
+_review_budget_seconds = 30.0
+_provider_cooldown_seconds = 300.0
+_judge_deadline = contextvars.ContextVar('response_critic_deadline', default=None)
+_judge_slots = threading.BoundedSemaphore(2)
+_provider_backoff = {}
+_provider_backoff_lock = threading.Lock()
+
+
+def _request_timeout(default):
+    deadline = _judge_deadline.get()
+    return max(.001, min(default, deadline - time.monotonic())) if deadline is not None else min(default, _review_budget_seconds)
+
+
+def _provider_available(name):
+    with _provider_backoff_lock:
+        return time.monotonic() >= _provider_backoff.get(name, 0)
+
+
+def _cool_provider(name):
+    with _provider_backoff_lock:
+        _provider_backoff[name] = time.monotonic() + _provider_cooldown_seconds
 
 # Optional cooperative policy; standalone behavior stays enabled and unchanged.
 _plugin_context = None
@@ -412,11 +435,16 @@ def _open_verify_gate(**_kwargs) -> None:
     """
     if _critic_mode == "off":
         return
+    if _critic_mode != "active":
+        return
     try:
         _ensure_logging()
         agent = _get_agent()
         if agent is None:
             return
+        with _context_lock:
+            if _turn_context.get(str(getattr(agent, 'session_id', '') or ''), {}).get('parent_session_id'):
+                return
         current = getattr(agent, "_turn_file_mutation_paths", None)
         if current is None:
             logger.error(
@@ -585,6 +613,8 @@ def _parse_verdict(content: str):
 
 def _judge_kimi(user_message: str, effort: str, system: str):
     """Primary judge: Kimi K3 on the kimi-coding chat_completions wire."""
+    if not _provider_available("kimi"):
+        return None
     api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("KIMI_CODING_API_KEY")
     if not api_key:
         logger.warning("Critic: KIMI_API_KEY not set — primary judge unavailable")
@@ -606,12 +636,14 @@ def _judge_kimi(user_message: str, effort: str, system: str):
         # Moonshot's brotli SSE decode is broken in httpx; gzip only.
         "Accept-Encoding": "gzip",
     }
-    with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+    with httpx.Client(timeout=_request_timeout(REQUEST_TIMEOUT)) as client:
         resp = client.post(f"{base}/chat/completions", headers=headers, json=payload)
         if resp.status_code != 200:
             logger.warning(
                 "Critic kimi request failed: HTTP %s", resp.status_code
             )
+            if resp.status_code in {401, 403, 429}:
+                _cool_provider("kimi")
             return None
         return _parse_verdict(resp.json()["choices"][0]["message"]["content"])
 
@@ -633,6 +665,8 @@ def _valid_judge_verdict(verdict) -> bool:
 
 def _judge_openrouter(user_message: str, effort: str, system: str):
     """OpenRouter fallback at configured maximum effort; never silently downgrade."""
+    if not _provider_available("openrouter-fallback"):
+        return None
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         return None
@@ -648,23 +682,80 @@ def _judge_openrouter(user_message: str, effort: str, system: str):
         ],
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=OPENROUTER_TIMEOUT) as client:
+    with httpx.Client(timeout=_request_timeout(OPENROUTER_TIMEOUT)) as client:
         resp = client.post("https://openrouter.ai/api/v1/chat/completions",
                            headers=headers, json=payload)
         if resp.status_code != 200:
             logger.warning(
                 "Critic openrouter request failed: HTTP %s", resp.status_code
             )
+            if resp.status_code in {401, 403, 429}:
+                _cool_provider("openrouter-fallback")
             return None
         return _parse_verdict(resp.json()["choices"][0]["message"]["content"])
 
 
+def _bounded_result(callback, deadline, label):
+    """Bound caller wait; late inference results cannot issue a continuation.
+
+    Two slots bound abandoned network workers. On exhaustion/error/timeout fail
+    open, without queuing another model or touching the main agent.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or not _judge_slots.acquire(blocking=False):
+        logger.info("Critic: %s skipped (budget/capacity)", label)
+        return None
+    done, result = threading.Event(), {}
+    context = contextvars.copy_context()
+
+    def work():
+        token = _judge_deadline.set(deadline)
+        try:
+            result["value"] = callback()
+        except Exception as exc:
+            logger.warning("Critic: %s unavailable (%s)", label, type(exc).__name__)
+        finally:
+            _judge_deadline.reset(token)
+            _judge_slots.release()
+            done.set()
+
+    try:
+        threading.Thread(target=lambda: context.run(work), name="critic-bounded-review", daemon=True).start()
+    except RuntimeError:
+        _judge_slots.release()
+        return None
+    if not done.wait(max(0, deadline - time.monotonic())):
+        logger.info("Critic: %s deadline reached; delivering without its verdict", label)
+        return None
+    return result.get("value")
+
+
 def _judge(user_message: str, effort: str, system: str):
+    deadline = _judge_deadline.get() or time.monotonic() + _review_budget_seconds
+    result = _bounded_result(lambda: _judge_chain(user_message, effort, system), deadline, "judge")
+    return result if isinstance(result, tuple) else (None, "none")
+
+
+def _review_outcome(text, session_id, evidence):
+    # Outcome shadow observation belongs to the nonblocking post-LLM worker,
+    # not an extra billed call on the delivery-critical pre_verify path.
+    if not _outcome_review_enabled or _critic_mode != "active" or _outcome_review_mode != "active":
+        return None
+    deadline = min(_judge_deadline.get() or float('inf'), time.monotonic() + 8)
+    return _bounded_result(lambda: _review_outcome_impl(text, session_id, evidence), deadline, "outcome")
+
+
+def _judge_chain(user_message: str, effort: str, system: str):
     """Kimi -> OpenRouter at maximum reasoning, preserving valid challenges."""
     providers = [("kimi", _judge_kimi)]
     if _fallback_enabled:
         providers.append(("openrouter-fallback", _judge_openrouter))
     for name, callback in providers:
+        deadline = _judge_deadline.get()
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        if not _provider_available(name):
+            continue
         try:
             verdict = callback(user_message, effort, system)
             if _valid_judge_verdict(verdict):
@@ -676,7 +767,7 @@ def _judge(user_message: str, effort: str, system: str):
     return None, "none"
 
 
-def _review_outcome(text, session_id, evidence):
+def _review_outcome_impl(text, session_id, evidence):
     """Call only the other plugin's public, scoped tool; abstain on all failures."""
     import math
     if not _outcome_review_enabled or _plugin_context is None:
@@ -794,14 +885,17 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
                             changed_paths=None, **_kwargs):
     """pre_verify callback: accept the draft, or send the agent back to fix it."""
     _ensure_logging()
+    review_started = time.monotonic()
     text = (final_response or "").strip()
     key = session_id or "-"
     with _context_lock:
+        if _turn_context.get(session_id, {}).get('parent_session_id'):
+            return None
         _acknowledgments.pop(session_id, None)
     if attempt == 0:
         with _feedback_lock:
             _turn_feedback.pop(key, None)
-    if attempt >= _max_iterations or _critic_mode == "off":
+    if attempt >= _max_iterations or _critic_mode != "active":
         with _feedback_lock:
             _turn_feedback.pop(key, None)
         return None
@@ -869,7 +963,11 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
         evidence if evidence is not None else _evidence_appendix(session_id=session_id))
     system = _redact_for_review(system)
 
-    verdict, judge_name = _judge(user_message, effort, system)
+    token = _judge_deadline.set(review_started + _review_budget_seconds)
+    try:
+        verdict, judge_name = _judge(user_message, effort, system)
+    finally:
+        _judge_deadline.reset(token)
     if not isinstance(verdict, dict):
         return None                        # fail open — never trap the turn
 
@@ -908,7 +1006,19 @@ def register(ctx):
     global _triage_enabled, _judge_model, _judge_base_url
     global _fallback_model, _fallback_enabled, _fallback_effort
     global _plugin_context, _critic_mode, _outcome_review_enabled, _outcome_review_mode
+    global _review_budget_seconds, _provider_cooldown_seconds
     _plugin_context = ctx
+    for name, default in (("review_budget_seconds", 30.0), ("provider_cooldown_seconds", 300.0)):
+        try:
+            value = float(ctx.get_config(name, default))
+            if not 1 <= value <= (120 if name == "review_budget_seconds" else 3600):
+                value = default
+        except (TypeError, ValueError):
+            value = default
+        if name == "review_budget_seconds":
+            _review_budget_seconds = value
+        else:
+            _provider_cooldown_seconds = value
     _critic_mode = str(ctx.get_config("critic_mode", "active") or "active").lower()
     if _critic_mode not in {"active", "shadow", "off"}:
         _critic_mode = "active"

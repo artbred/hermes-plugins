@@ -1,5 +1,5 @@
 name: scenario-router
-version: 0.2.1
+version: 0.3.0
 description: "Outcome-only Jev reviewer and shadow evaluation. Recommendations only; no pre-run routing."
 author: Artem
 kind: standalone
