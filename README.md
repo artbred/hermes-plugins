@@ -45,6 +45,18 @@ Use supported plugin reload/session startup. Hooks can reload immediately; new t
 
 This explicitly opts into live outcome policy; shipped defaults remain shadow/standalone. For observation only, set both `mode`/`outcome_review_mode` to `shadow`. Active mode performs one inline Jev outcome decision and no duplicate automatic post-run observation. See [active optional-review validation](docs/active-review.md) for exercised behavior and limitations, and [latency and compatibility review](docs/latency-review.md) for budgets. Activating policy does not establish calibrated scenario accuracy.
 
+## Superset workspaces
+
+[Superset lifecycle configuration](.superset/config.json) requires Python 3.10+
+with `venv` and `pip`. Setup creates a workspace-local `.venv` and installs
+`httpx` from the plugin requirements plus `pytest`, `pyyaml`, and `python-dotenv`.
+Use `source .venv/bin/activate` or `.venv/bin/python` for local commands.
+
+There is no dev server or required database/container, so `run` is omitted and
+`teardown` is empty. Setup does not copy credentials, enable plugins, or change
+the Hermes profile. Full integration tests still require the compatible Hermes
+source checkout described below.
+
 ## Validation
 
 Tests require a compatible Hermes source checkout and an isolated Python environment with `pytest`, `httpx`, `pyyaml` and `python-dotenv`, plus the Hermes runtime dependencies needed by its plugin manager.

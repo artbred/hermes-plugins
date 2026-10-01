@@ -1,0 +1,6 @@
+{
+  "setup": [
+    "python3 -m venv .venv && .venv/bin/python -m pip install -r plugins/scenario-router/requirements.txt pytest pyyaml python-dotenv"
+  ],
+  "teardown": []
+}
