@@ -73,9 +73,8 @@ QUESTIONS = {
     },
     'judge_effort': {
         'type': 'choice',
-        'instructions': 'Independently select reasoning effort for an additional generative judge if required. Minimum is medium on EVERY provider; no low, none or xhigh label. Do not infer effort from outcome labels alone. Weigh complexity, consequential claims, contradictory evidence, authorization, safety and uncertainty. Choose max for difficult/high-risk/unclear reviews; use medium or high when sufficient. This is judge effort, never the main agent model or its reasoning.',
+        'instructions': 'Independently select reasoning effort for an additional generative judge if required. Only high or max is allowed. Never emit medium, low, none or a provider-specific xhigh label. Do not infer effort from outcome labels alone. Weigh complexity, consequential claims, contradictory evidence, authorization, safety and uncertainty. Choose max for difficult/high-risk/unclear reviews; use high when sufficient. The consumer maps max to the highest supported API level (max, otherwise xhigh, otherwise high). This is judge effort, never the main agent model or its reasoning.',
         'criteria': {
-            'medium': 'Medium reasoning is sufficient for a straightforward bounded evidence review.',
             'high': 'High reasoning is needed for multi-step or conflicting evidence review.',
             'max': 'Maximum available provider reasoning is needed for difficult, high-risk or uncertain verification.',
         },
@@ -162,7 +161,7 @@ def judge_policy(answers: dict, cfg: dict) -> dict:
     """Independent conservative policy; scenario uncertainty does not erase effort."""
     fallback = {'judge_required': True, 'judge_confidence': 0.0, 'verifier_effort': 'max'}
     required = choice(answers.get('judge_required'), {'required', 'skip'}, cfg['confidence_threshold'])
-    effort = choice(answers.get('judge_effort'), {'medium', 'high', 'max'})
+    effort = choice(answers.get('judge_effort'), {'high', 'max'})
     if not required or not effort:
         return fallback
     confidence = float(answers['judge_required']['confidence'])
@@ -602,7 +601,7 @@ def evaluate(path: Path, cfg: dict, *, live: bool = False, client=None) -> tuple
         expected = row.get('expected')
         if not isinstance(expected, dict) or set(expected) not in ({'scenario', 'disposition'}, {'scenario', 'disposition', 'judge_required', 'verifier_effort'}):
             raise ValueError('Each fixture requires independent expected scenario/disposition and optionally judge policy')
-        if 'judge_required' in expected and (type(expected['judge_required']) is not bool or not isinstance(expected['verifier_effort'], str) or expected['verifier_effort'] not in {'medium', 'high', 'max'}):
+        if 'judge_required' in expected and (type(expected['judge_required']) is not bool or not isinstance(expected['verifier_effort'], str) or expected['verifier_effort'] not in {'high', 'max'}):
             raise ValueError('Invalid expected judge policy')
         if any(not isinstance(expected[k], str) for k in ('scenario', 'disposition')) or expected['scenario'] not in set(QUESTIONS['outcome']['criteria']) | {'uncertain'} or expected['disposition'] not in {'accept', 'correct', 'recover', 'acknowledge', 'handoff', 'uncertain', 'refusal'}:
             raise ValueError('Invalid expected labels')

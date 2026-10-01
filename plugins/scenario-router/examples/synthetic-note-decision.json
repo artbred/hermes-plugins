@@ -46,11 +46,10 @@
     },
     "judge_effort": {
       "type": "choice",
-      "choice": "medium",
+      "choice": "high",
       "confidence": 1,
       "probabilities": {
-        "medium": 1,
-        "high": 0,
+        "high": 1,
         "max": 0
       }
     }

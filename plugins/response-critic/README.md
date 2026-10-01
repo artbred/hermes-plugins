@@ -5,7 +5,7 @@ A standalone Hermes plugin for bounded, pre-delivery verification. Install under
 It does not replace Hermes source, agent models, tool permissions, or gateway send methods.
 The original agent always runs with its normal toolset before outcome review.
 
-## Cooperative outcome review (1.6.0)
+## Cooperative outcome review (1.7.0)
 
 Settings live under `plugins.entries.response-critic.settings`:
 
@@ -17,10 +17,11 @@ critic_mode: active           # active (default), shadow, or off
 
 When enabled, the critic probes `ctx.has_plugin("scenario-router")` at review time
 and invokes only the public, profile-scoped
-`ctx.dispatch_tool("scenario_review_outcome", arguments)` interface. It does not
+`ctx.dispatch_tool("scenario_review_outcome", arguments, session_id=session_id)` interface. It does not
 import scenario-router internals or issue a second direct classifier HTTP request.
 The arguments are `user_message`, `assistant_response`, `evidence`, `internal`, and
-`pending_background`. The tool may return a JSON string or a decoded object.
+`pending_background`. Session identity is forwarded as a host dispatch keyword,
+not added to the model-bound evidence. The tool may return a JSON string or a decoded object.
 
 - **Outcome shadow:** do not call Jev from the delivery-critical verification hook.
   The scenario plugin observes asynchronously after the completed run. The active
@@ -30,7 +31,7 @@ The arguments are `user_message`, `assistant_response`, `evidence`, `internal`, 
   tool's returned mode all to be `active`. Jev independently supplies the review
   disposition/confidence and judge policy: `judge_required` (strict boolean),
   `judge_confidence` (finite number in 0..1, never a boolean), and
-  `verifier_effort` (`medium`, `high`, or `max`; no `low`/`xhigh`).
+  `verifier_effort` (`high` or `max` only; no `medium`/`low`/`xhigh`).
   A trusted required choice (`judge_confidence >= 0.97`) runs the generative judge
   at the requested effort even if scenario/disposition confidence is weaker.
   A trusted skip choice (`judge_required: false`, policy **and** relevant review
@@ -68,18 +69,37 @@ change a sticky provider, or guarantee prevention of tool side effects. Other pl
 
 1. Kimi K3 on the Kimi Coding chat-completions wire.
 2. OpenRouter: `meta/muse-spark-1.3-contributor`, `reasoning.effort` set to the
-   requested canonical `medium`, `high`, or `max`.
+   capability-resolved wire effort for the requested canonical `high` or `max`.
 
 Quota, authentication, network errors, and invalid verdicts advance directly from
 Kimi to OpenRouter. A valid `passed: false` challenge is not bypassed. The OpenRouter
 request requires parameter support and reserves **16,384 output tokens**; unsupported
 reasoning is unavailable, not retried at lower effort or with reasoning disabled.
-Kimi's supported wire values are `high` and `max`: canonical `medium` rounds **up**
-to `high`, `high` remains `high`, and `max` remains `max`. All adapters use the
-same bounded helper; legacy `minimal`/`low` clamp to `medium`, `xhigh` to `max`,
-and unknown values to `max`. Standalone selection uses `min_effort` (default
-`medium`) and `max_effort` (default `max`); active cooperative abstentions use
-`max`. Deprecated `fallback_effort` no longer overrides a valid requested effort.
+The canonical policy has exactly two levels: **high** and **max**. The shared
+resolver uses `high` when supported for a high request, otherwise the highest
+usable effort. For max it prefers **max → xhigh → high**, according to verified
+capabilities. It never sends `medium`, `low`, `minimal`, `none` or disabled reasoning.
+Legacy `medium`/`minimal`/`low` settings clamp upward to `high`; legacy `xhigh`
+canonicalizes to `max`; unknown settings use `max`. Standalone selection uses
+`min_effort` (default `high`) and `max_effort` (default `max`); active cooperative
+abstentions use `max`. Deprecated `fallback_effort` never overrides requested effort.
+
+Kimi defaults apply only to the known `k3` route at
+`https://api.kimi.com/coding/v1`, which supports `high` and `max`. A nonstandard
+compatible route must explicitly configure `judge_supported_efforts`, for example
+`[high, xhigh]`; missing or unusable capabilities make it unavailable. OpenRouter
+capabilities come from public **GET https://openrouter.ai/api/v1/models**, using
+`reasoning.supported_efforts` for the configured fallback model. An explicit null means all gateway effort levels are accepted; an omitted field does not establish support. No prompt, history,
+credential, or session identity is sent in this metadata request. Only the chosen
+model's usable levels and expiry are retained in profile-scoped `ctx.state`
+(`reasoning_capability_cache_v1`), keyed by provider/model/route hash, at most 128
+entries. Successful metadata lasts one hour; unavailable/missing metadata is
+negatively cached for one minute. Fetching is limited to a ten-second transport
+timeout/deadline, 8 MB and 10,000 models, inside the shared 300-second review budget.
+Missing metadata never silently weakens effort. No usable level means provider
+unavailable with the existing technical failure circuit/fallback; no invented level
+or blind alternate-effort retries. The current default Contributor metadata exposes
+`max`, `xhigh` and `high`; canonical requests remain `max` or `high`.
 No subscription login helper or credential store is used. A structured provider
 safety refusal/content filter blocks fallback without counting as a technical
 outage or resetting failures (it is not a schema verdict).
@@ -130,6 +150,21 @@ Only 128 provider identities are retained. If the host lacks/unavailability bloc
 `ctx.state`, a logged in-memory fallback still suppresses repeated failures, but
 does **not** promise reload durability. Cache failures never log raw error bodies.
 
+### Privacy-safe decision audit (future analysis)
+
+`ctx.state` also retains `review_decision_audit_v1`, bounded to the most recent
+256 events per profile. Provider-attempt events record timestamp, hashed session
+identity, requested canonical effort, effective wire effort (or null when unavailable),
+provider/model/route hash, elapsed seconds, and `pass`/`fail`/`unavailable`. Local
+skips use allowlisted reason labels; they have no invented wire effort/verdict.
+Cached circuit skips and delivery timeouts are observable too. Late abandoned
+workers cannot append verdict events. Updates use the same cross-thread/module/
+process advisory transaction as the failure cache. No drafts, prompts, tool output,
+feedback, raw session IDs, raw provider/model names, or error bodies are retained.
+The audit stays local: it is not sent to providers and does not form a similar-request
+pool or change main-agent routing. It supports later analysis, not an implemented
+learning/routing policy. Missing host state has only the documented in-memory fallback.
+
 ## Hooks and compatibility
 
 - `pre_gateway_dispatch`: observes a legacy exact-match internal provenance bridge;
@@ -177,7 +212,9 @@ explicit mocks, not live provider or persistence results. Real PluginManager tes
 load this plugin and a test-only cooperative tool into temporary profile scopes.
 Coverage includes standalone fallback behavior, mode intersection, strict judge-policy
 validation, required-policy independence from scenario confidence, canonical effort
-payloads on both providers, maximum-effort abstention, bounded recovery,
+payloads on both providers, max/xhigh/high-only capability fallback, unavailable
+metadata, cache TTL/reload/profile separation, privacy-safe bounded concurrent audit,
+actual scoped session dispatch, maximum-effort abstention, bounded recovery,
 verified/unverified acknowledgments, durable cache/reload/profile scope, threshold
 and immediate circuits, expiry probes, bounded backoff/Retry-After, valid negative
 reset, parallel cache atomicity, late-result isolation, structured refusal handling,

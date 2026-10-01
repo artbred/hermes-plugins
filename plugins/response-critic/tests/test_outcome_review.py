@@ -81,6 +81,7 @@ def test_active_accept_skips_full_judge_and_uses_public_contract(critic, wire_js
     name, args = ctx.dispatch_tool.call_args.args
     assert name == 'scenario_review_outcome'
     assert set(args) == {'user_message', 'assistant_response', 'evidence', 'internal', 'pending_background'}
+    assert ctx.dispatch_tool.call_args.kwargs['session_id'] == 's'
     assert args['user_message'] == NOTE and args['assistant_response'] == DRAFT
     assert args['internal'] is False and args['pending_background'] is False
 
@@ -359,7 +360,7 @@ def test_public_manager_cooperative_dispatch_in_isolated_scope(tmp_path, monkeyp
         'import json\nSEEN = []\nMOCK = ' + repr(envelope()) + '\n'
         'def register(ctx):\n'
         '    def handler(args, **kw):\n'
-        '        SEEN.append(args)\n'
+        '        SEEN.append((args, kw))\n'
         '        return json.dumps(MOCK)\n'
         '    ctx.register_tool(name="scenario_review_outcome", toolset="scenario-router", '
         'schema={"name":"scenario_review_outcome","description":"Test-only mock outcome",'
@@ -374,7 +375,10 @@ def test_public_manager_cooperative_dispatch_in_isolated_scope(tmp_path, monkeyp
                         conversation_history=[{'role': 'user', 'content': NOTE}])
     assert all(result is None for result in manager.invoke_hook('pre_verify', final_response=DRAFT, session_id='s'))
     seen = manager._plugins['scenario-router'].module.SEEN
-    assert len(seen) == 1 and seen[0]['user_message'] == NOTE
+    assert len(seen) == 1 and seen[0][0]['user_message'] == NOTE
+    assert seen[0][1]['session_id'] == 's'
+    audit = loaded._provider_state.get(loaded._AUDIT_STATE_KEY)
+    assert len(audit) == 1 and next(iter(audit.values()))['skip'] == 'accept'
     loaded._judge.assert_not_called()
 
 
@@ -461,7 +465,7 @@ def test_state_is_bounded_and_capture_never_dispatches_jev(critic):
     ctx.dispatch_tool.assert_not_called()
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 @pytest.mark.parametrize('disposition,confidence', [
     ('accept', .99), ('accept', .25), ('uncertain', .99), ('uncertain', .25),
     ('refusal', .99), ('handoff', .99), ('acknowledge', .99),
@@ -479,7 +483,7 @@ def test_required_judge_uses_policy_confidence_not_disposition_confidence(
     assert critic.suppress_exact_internal_duplicate(DRAFT, session_id='s', turn_id='turn-1') is None
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 @pytest.mark.parametrize('draft', ['', 'Added.', DRAFT, EXACT_HANDOFF])
 def test_required_judge_cannot_be_bypassed_by_short_trivial_or_background_handoff(
         critic, monkeypatch, effort, draft):
@@ -494,7 +498,7 @@ def test_required_judge_cannot_be_bypassed_by_short_trivial_or_background_handof
 
 @pytest.mark.parametrize('judge_required', [True, False])
 @pytest.mark.parametrize('confidence', [0, .96, .969999])
-@pytest.mark.parametrize('effort', ['medium', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 def test_low_policy_confidence_uses_max_judge(critic, judge_required, confidence, effort):
     connect(critic, envelope(judge_required=judge_required, judge_confidence=confidence,
                              verifier_effort=effort))
@@ -510,7 +514,7 @@ def test_low_policy_confidence_uses_max_judge(critic, judge_required, confidence
     ('judge_confidence', '.99'), ('judge_confidence', -.01), ('judge_confidence', 1.01),
     ('judge_confidence', float('nan')), ('judge_confidence', float('inf')),
     ('judge_confidence', float('-inf')), ('judge_confidence', {}),
-    ('verifier_effort', 'low'), ('verifier_effort', 'minimal'), ('verifier_effort', 'xhigh'),
+    ('verifier_effort', 'medium'), ('verifier_effort', 'low'), ('verifier_effort', 'minimal'), ('verifier_effort', 'xhigh'),
     ('verifier_effort', 'unknown'), ('verifier_effort', ''), ('verifier_effort', None),
     ('verifier_effort', False), ('verifier_effort', []),
 ])
@@ -534,7 +538,7 @@ def test_missing_policy_field_abstains_to_max_judge(critic, field):
 
 
 @pytest.mark.parametrize('disposition', ['accept', 'acknowledge', 'handoff'])
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 def test_explicit_trusted_optional_judge_skips_only_supported_outcomes(
         critic, monkeypatch, disposition, effort):
     connect(critic, envelope(disposition, confidence=.97, judge_confidence=.97,
@@ -548,7 +552,7 @@ def test_explicit_trusted_optional_judge_skips_only_supported_outcomes(
 
 @pytest.mark.parametrize('disposition', ['accept', 'acknowledge', 'handoff', 'uncertain', 'refusal'])
 def test_optional_judge_does_not_skip_uncertain_outcome(critic, monkeypatch, disposition):
-    connect(critic, envelope(disposition, confidence=.96, verifier_effort='medium'))
+    connect(critic, envelope(disposition, confidence=.96, verifier_effort='high'))
     memory_history(critic, monkeypatch)
     monkeypatch.setattr(critic, '_background_pending', lambda sid: True)
     assert critic.validate_final_response(EXACT_HANDOFF, session_id='s') is None
@@ -559,7 +563,7 @@ def test_optional_judge_does_not_skip_uncertain_outcome(critic, monkeypatch, dis
 
 @pytest.mark.parametrize('disposition', ['uncertain', 'refusal'])
 def test_optional_judge_does_not_skip_unsupported_disposition(critic, monkeypatch, disposition):
-    connect(critic, envelope(disposition, verifier_effort='medium'))
+    connect(critic, envelope(disposition, verifier_effort='high'))
     monkeypatch.setattr(critic, '_background_pending', lambda sid: True)
     assert critic.validate_final_response(EXACT_HANDOFF, session_id='s') is None
     critic._judge.assert_called_once()
@@ -568,7 +572,7 @@ def test_optional_judge_does_not_skip_unsupported_disposition(critic, monkeypatc
 
 @pytest.mark.parametrize('disposition', ['acknowledge', 'handoff'])
 def test_rejected_skip_gate_uses_max_not_policy_effort(critic, disposition):
-    connect(critic, envelope(disposition, verifier_effort='medium'))
+    connect(critic, envelope(disposition, verifier_effort='high'))
     assert critic.validate_final_response('Added.', session_id='s') is None
     critic._judge.assert_called_once()
     assert critic._judge.call_args.args[1] == 'max'
@@ -577,7 +581,7 @@ def test_rejected_skip_gate_uses_max_not_policy_effort(critic, disposition):
 
 @pytest.mark.parametrize('mode', ['shadow', 'off'])
 def test_inactive_remote_mode_cannot_supply_policy_effort(critic, monkeypatch, mode):
-    connect(critic, envelope('handoff', mode=mode, judge_required=True, verifier_effort='medium'))
+    connect(critic, envelope('handoff', mode=mode, judge_required=True, verifier_effort='high'))
     monkeypatch.setattr(critic, '_background_pending', lambda sid: True)
     assert critic.validate_final_response(EXACT_HANDOFF, session_id='s') is None
     critic._judge.assert_called_once()
@@ -589,7 +593,7 @@ def test_inactive_remote_mode_cannot_supply_policy_effort(critic, monkeypatch, m
 @pytest.mark.parametrize('passed', [True, False])
 def test_high_confidence_recovery_cannot_bypass_required_or_unknown_judge(critic, disposition, policy, passed):
     result = envelope(disposition, confidence=.97, feedback=CHALLENGE['feedback'],
-                      judge_required=True, verifier_effort='medium')
+                      judge_required=True, verifier_effort='high')
     if policy == 'low-confidence':
         result['review']['judge_confidence'] = .2
     elif policy == 'missing':
@@ -607,7 +611,7 @@ def test_high_confidence_recovery_cannot_bypass_required_or_unknown_judge(critic
         assert continuation['action'] == 'continue'
         assert CHALLENGE['feedback'] in continuation['message']
     critic._judge.assert_called_once()
-    assert critic._judge.call_args.args[1] == ('medium' if policy == 'required' else 'max')
+    assert critic._judge.call_args.args[1] == ('high' if policy == 'required' else 'max')
 
 
 @pytest.mark.parametrize('disposition', ['correct', 'recover'])
@@ -621,7 +625,7 @@ def test_low_outcome_confidence_does_not_continue_but_keeps_required_effort(crit
 
 @pytest.mark.parametrize('policy', ['low-confidence', 'missing', 'invalid', 'unavailable'])
 def test_untrusted_policy_cannot_fall_back_to_legacy_background_skip(critic, monkeypatch, policy):
-    result = envelope('handoff', verifier_effort='medium')
+    result = envelope('handoff', verifier_effort='high')
     if policy == 'low-confidence':
         result['review']['judge_confidence'] = .96
     elif policy == 'missing':
@@ -639,7 +643,7 @@ def test_untrusted_policy_cannot_fall_back_to_legacy_background_skip(critic, mon
 
 
 def test_optional_acknowledgment_requires_human_turn_even_with_verified_memory(critic, monkeypatch):
-    connect(critic, envelope('acknowledge', verifier_effort='medium'))
+    connect(critic, envelope('acknowledge', verifier_effort='high'))
     critic._turn_context['s']['internal'] = True
     memory_history(critic, monkeypatch)
     assert critic.validate_final_response(DRAFT, session_id='s') is None
@@ -651,7 +655,7 @@ def test_optional_acknowledgment_requires_human_turn_even_with_verified_memory(c
 @pytest.mark.parametrize('disposition', ['accept', 'correct', 'recover'])
 def test_optional_judge_policy_still_respects_single_correction_cap(critic, disposition):
     ctx = connect(critic, envelope(disposition, feedback=CHALLENGE['feedback'],
-                                  judge_required=True, verifier_effort='medium'))
+                                  judge_required=True, verifier_effort='high'))
     critic._max_iterations = 1
     assert critic.validate_final_response(DRAFT, session_id='s', attempt=1) is None
     ctx.dispatch_tool.assert_not_called()

@@ -1,5 +1,5 @@
 name: response-critic
-version: 1.6.0
-description: "Jev-controlled optional verification, medium-to-max reasoning, and durable provider failure circuits."
+version: 1.7.0
+description: "Jev-controlled optional verification, high/max capability-aware reasoning, durable provider circuits, and private decision audit."
 author: Response Critic contributors
 kind: standalone

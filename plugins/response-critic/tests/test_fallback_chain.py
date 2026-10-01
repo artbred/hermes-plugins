@@ -31,44 +31,44 @@ def chain(c, monkeypatch, kimi=None, router=None):
 
 def test_kimi_success_stops_chain(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=PASS, router=FAIL)
-    assert critic._judge('draft', 'medium', 'system') == (PASS, 'kimi')
+    assert critic._judge('draft', 'high', 'system') == (PASS, 'kimi')
     assert seen == ['kimi']
 
 
 def test_valid_kimi_challenge_is_not_bypassed(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=FAIL, router=PASS)
-    assert critic._judge('draft', 'medium', 'system') == (FAIL, 'kimi')
+    assert critic._judge('draft', 'high', 'system') == (FAIL, 'kimi')
     assert seen == ['kimi']
 
 
 def test_kimi_unavailable_uses_router_directly(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=None, router=PASS)
-    assert critic._judge('draft', 'medium', 'system') == (PASS, 'openrouter-fallback')
+    assert critic._judge('draft', 'high', 'system') == (PASS, 'openrouter-fallback')
     assert seen == ['kimi', 'router']
 
 
 def test_timeout_advances_to_router(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=httpx.ReadTimeout('test timeout'), router=PASS)
-    assert critic._judge('draft', 'medium', 'system') == (PASS, 'openrouter-fallback')
+    assert critic._judge('draft', 'high', 'system') == (PASS, 'openrouter-fallback')
     assert seen == ['kimi', 'router']
 
 
 def test_invalid_schema_advances(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi={'passed':'false'}, router=FAIL)
-    assert critic._judge('draft', 'medium', 'system') == (FAIL, 'openrouter-fallback')
+    assert critic._judge('draft', 'high', 'system') == (FAIL, 'openrouter-fallback')
     assert seen == ['kimi', 'router']
 
 
 def test_all_unavailable_fail_open(critic, monkeypatch):
     seen = chain(critic, monkeypatch)
-    assert critic._judge('draft', 'medium', 'system') == (None, 'none')
+    assert critic._judge('draft', 'high', 'system') == (None, 'none')
     assert seen == ['kimi', 'router']
 
 
 def test_disabled_fallback_is_not_called(critic, monkeypatch):
     critic._fallback_enabled = False
     seen = chain(critic, monkeypatch, kimi=None, router=PASS)
-    assert critic._judge('draft', 'medium', 'system') == (None, 'none')
+    assert critic._judge('draft', 'high', 'system') == (None, 'none')
     assert seen == ['kimi']
 
 
@@ -80,11 +80,13 @@ def test_subscription_route_has_been_removed(critic):
 def http_client(c, monkeypatch, response):
     post = Mock(return_value=response)
     client = Mock(); client.__enter__ = Mock(return_value=client); client.__exit__ = Mock(return_value=False); client.post = post
+    # Explicit offline capability fixture; capability discovery is tested separately.
+    monkeypatch.setattr(c, '_fetch_openrouter_efforts', lambda: ['high', 'max'])
     monkeypatch.setattr(c.httpx, 'Client', lambda **kw: client)
     return post
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 def test_openrouter_preserves_requested_effort_and_contributor(critic, monkeypatch, effort):
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-openrouter')
     post = http_client(critic, monkeypatch, httpx.Response(200, json={'choices':[{'message':{'content':json.dumps(PASS)}}]}))
@@ -96,7 +98,7 @@ def test_openrouter_preserves_requested_effort_and_contributor(critic, monkeypat
     assert payload['provider']['require_parameters'] is True
 
 
-@pytest.mark.parametrize('effort,wire_effort', [('medium', 'high'), ('high', 'high'), ('max', 'max')])
+@pytest.mark.parametrize('effort,wire_effort', [('high', 'high'), ('max', 'max')])
 def test_kimi_preserves_supported_requested_effort(critic, monkeypatch, effort, wire_effort):
     monkeypatch.setenv('KIMI_API_KEY', 'test-kimi')
     post = http_client(critic, monkeypatch, httpx.Response(200, json={'choices':[{'message':{'content':json.dumps(PASS)}}]}))
@@ -104,7 +106,7 @@ def test_kimi_preserves_supported_requested_effort(critic, monkeypatch, effort, 
     assert post.call_args.kwargs['json']['reasoning_effort'] == wire_effort
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 def test_fallback_chain_forwards_requested_effort_unchanged(critic, monkeypatch, effort):
     primary = Mock(return_value=None)
     fallback = Mock(return_value=PASS)
@@ -116,7 +118,7 @@ def test_fallback_chain_forwards_requested_effort_unchanged(critic, monkeypatch,
 
 
 @pytest.mark.parametrize('effort,canonical', [
-    ('low', 'medium'), ('minimal', 'medium'), ('xhigh', 'max'),
+    ('medium', 'high'), ('low', 'high'), ('minimal', 'high'), ('xhigh', 'max'),
     ('unknown', 'max'), ('', 'max'), (None, 'max'), (False, 'max'),
 ])
 @pytest.mark.parametrize('provider', ['kimi', 'openrouter'])
@@ -136,7 +138,7 @@ def test_transport_effort_is_bounded_even_for_legacy_or_invalid_callers(critic, 
         assert payload['provider']['require_parameters'] is True
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 def test_rejected_thinking_is_not_retried_without_reasoning(critic, monkeypatch, effort):
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-openrouter')
     post = http_client(critic, monkeypatch, httpx.Response(400, json={'error':{'message':'test rejection'}}))

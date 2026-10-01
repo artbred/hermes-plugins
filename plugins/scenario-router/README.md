@@ -1,4 +1,4 @@
-# Scenario router v0.4.0: outcome-only Jev judge policy
+# Scenario router v0.5.0: outcome-only Jev judge policy
 
 The agent **always runs normally first**, including its own memory storage and
 readback. Jev then judges the outcome. There is no incoming scenario classifier,
@@ -13,7 +13,7 @@ are required. Python 3.10+ and `httpx` are the standalone dependencies.
 
 - Atomic OpenRouter Decisions questions (`typesafe/jev-1.13`): `outcome`,
   `verdict`, `memory_evidence`, `judge_required` (`required`/`skip`) and
-  `judge_effort` (`medium`/`high`/`max`). Not chat/completions or free-form
+  `judge_effort` (`high`/`max`). Not chat/completions or free-form
   generated feedback. English and Russian synthetic examples are supplied.
 - Strict label/distribution/confidence validation; errors, missing keys, invalid
   probabilities, and insufficient relevant confidence abstain toward a full verifier.
@@ -35,7 +35,7 @@ are required. Python 3.10+ and `httpx` are the standalone dependencies.
   has `applied:false`, `judge_required`, `judge_confidence` and `verifier_effort`.
   These fields are advice, not an assertion that another plugin's configuration or
   delivered response changed. Jev independently selects whether another generative
-  judge is needed and, if so, medium, high or maximum provider reasoning.
+  judge is needed and, if so, high or maximum provider reasoning.
 - A bounded in-memory turn capture records the latest redacted prompt, trusted
   provenance, and actual redacted tool evidence digests. Persisted `last_decision`
   and bounded `review_history` contain only validated labels, fixed feedback,
@@ -86,7 +86,7 @@ last two are booleans. The handler returns a **JSON string** with this envelope:
     "feedback": "fixed allowlisted actionable text",
     "judge_required": false,
     "judge_confidence": 0.99,
-    "verifier_effort": "medium",
+    "verifier_effort": "high",
     "applied": false
   },
   "answers": {},
@@ -111,7 +111,7 @@ Outcome labels:
 
 Verdict labels: `ready`, `correction_needed`, `uncertain`.
 Memory-evidence labels: `confirmed`, `not_confirmed`, `not_applicable`.
-Judge-required labels: `required`, `skip`. Judge-effort labels: `medium`, `high`, `max`.
+Judge-required labels: `required`, `skip`. Judge-effort labels: `high`, `max`.
 Dispositions: `accept`, `correct`, `recover`, `acknowledge`, `handoff`,
 `uncertain`, `refusal`. Local failures use scenario `uncertain`.
 
@@ -133,7 +133,7 @@ checks. `disposition=accept` alone never skips a judge.
   `verifier_effort:"max"`, `judge_confidence:0`. Both Choice schemas must validate.
 - Required-judge policy uses the minimum of `judge_required` and `judge_effort`
   confidences; both must reach `confidence_threshold` (default .90). Scenario
-  confidence is separate: a usable required/medium or required/high policy is
+  confidence is separate: a usable required/high policy is
   retained even below .97, or when scenario readiness abstains. Do not reject
   that policy merely because `ok=false` or scenario confidence is low.
 - Skip requires explicit `judge_required=skip` confidence at least
@@ -148,10 +148,10 @@ checks. `disposition=accept` alone never skips a judge.
   unready outcomes and known incomplete evidence cannot authorize skip. Effort
   confidence is irrelevant to a valid skip; `judge_confidence` then uses only
   the required/skip question. Malformed effort still fails conservatively.
-- `medium`, `high` and `max` are provider-neutral judge intentions, not a
+- `high` and `max` are provider-neutral judge intentions, not a
   main-agent reasoning change. The cooperating verifier maps `max` to the
   provider's maximum supported reasoning; this plugin never sends a generative
-  provider request or emits below-medium/provider-specific labels such as `xhigh`.
+  provider request or emits below-high/provider-specific labels such as `xhigh`.
 
 An active consumer must validate mode, field types/ranges and effort allowlist.
 It may honor valid **required** policy independently of scenario readiness;
@@ -275,7 +275,7 @@ Use portable paths of your choosing; do not put API keys in state/fixture files.
 
 Each nonempty fixture JSONL line requires independent expected scenario/disposition
 labels. Optional `judge_required` (boolean) and `verifier_effort`
-(`medium`/`high`/`max`) expected fields must be supplied together; the bundled
+(`high`/`max`) expected fields must be supplied together; the bundled
 synthetic fixtures include both and test judge policy as well:
 
 ```json
@@ -289,7 +289,7 @@ synthetic fixtures include both and test judge policy as well:
     "pending_background": false
   },
   "expected": {"scenario": "normal_answer", "disposition": "accept",
-               "judge_required": false, "verifier_effort": "medium"},
+               "judge_required": false, "verifier_effort": "high"},
   "decision_origin": "stored_live",
   "decision_response": {"answers": {}}
 }
@@ -323,7 +323,7 @@ PYTHONPATH=path/to/hermes-agent python -m pytest tests -o addopts='' -q
 ```
 
 Tests cover public schema, mocked HTTP transport at the real Decisions endpoint,
-confidence/error abstention, independent required/skip and medium/high/max policy,
+confidence/error abstention, independent required/skip and high/max policy,
 conservative policy fallbacks, profile-scoped failure backoff and reload,
 write/readback semantics, acknowledgment gating,
 mixed-note answer behavior, refusal/no-bypass recommendations, pending/internal

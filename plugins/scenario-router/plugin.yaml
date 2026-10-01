@@ -1,5 +1,5 @@
 name: scenario-router
-version: 0.4.0
+version: 0.5.0
 description: "Outcome-only Jev optional-judge and reasoning policy. Recommendations only; no pre-run routing."
 author: Artem
 kind: standalone

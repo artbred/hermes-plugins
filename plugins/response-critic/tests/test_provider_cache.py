@@ -67,6 +67,7 @@ def transport(c, monkeypatch, responses):
     client.__enter__ = Mock(return_value=client)
     client.__exit__ = Mock(return_value=False)
     client.post = post
+    monkeypatch.setattr(c, '_fetch_openrouter_efforts', lambda: ['high', 'max'])
     monkeypatch.setattr(c.httpx, 'Client', lambda **kw: client)
     return post
 
@@ -81,7 +82,7 @@ def test_auth_quota_immediately_open_and_survive_reregister_and_reload(critic, m
     c = critic
     post = transport(c, monkeypatch, [httpx.Response(status, text='PRIVATE_PROVIDER_BODY')])
     callback = c._judge_kimi if provider == 'kimi' else c._judge_openrouter
-    assert callback('draft', 'medium', 'system') is None
+    assert callback('draft', 'high', 'system') is None
     assert row(c, provider)['failures'] == 1
     assert not c._provider_available(provider)
     register(c, c._provider_state)
@@ -145,7 +146,7 @@ def test_retry_after_is_validated_and_bounded(critic, monkeypatch, retry_after, 
     c = critic
     monkeypatch.setattr(c.time, 'time', lambda: 1_000_000.0)
     transport(c, monkeypatch, [httpx.Response(429, headers={'Retry-After': retry_after})])
-    c._judge_kimi('draft', 'medium', 'system')
+    c._judge_kimi('draft', 'high', 'system')
     assert row(c)['until'] == 1_000_000 + expected
 
 
@@ -163,11 +164,11 @@ def test_retry_after_http_date_supported(critic, monkeypatch):
 def test_only_valid_verdict_resets_consecutive_failure_count(critic, monkeypatch, verdict):
     c = critic
     transport(c, monkeypatch, [httpx.Response(500), wire(verdict), httpx.Response(500)])
-    assert c._judge_kimi('draft', 'medium', 'system') is None
+    assert c._judge_kimi('draft', 'high', 'system') is None
     assert row(c)['failures'] == 1
-    assert c._judge_kimi('draft', 'medium', 'system') == verdict
+    assert c._judge_kimi('draft', 'high', 'system') == verdict
     assert row(c)['failures'] == 0
-    assert c._judge_kimi('draft', 'medium', 'system') is None
+    assert c._judge_kimi('draft', 'high', 'system') is None
     assert row(c)['failures'] == 1 and c._provider_available('kimi')
 
 
@@ -284,7 +285,7 @@ def test_safety_refusal_not_counted_as_technical_outage_or_bypassed(critic, monk
     c = critic
     c._record_provider_failure('kimi', 'network')
     post = transport(c, monkeypatch, [httpx.Response(200, json={'choices': [choice]})])
-    verdict, provider = c._judge('draft', 'medium', 'system')
+    verdict, provider = c._judge('draft', 'high', 'system')
     assert provider == 'kimi' and verdict['passed'] is False
     assert 'Do not switch' in verdict['feedback']
     assert row(c)['failures'] == 1  # a structured refusal is not a schema verdict reset
@@ -368,8 +369,8 @@ def test_parallel_active_required_effort_http_and_feedback_are_session_isolated(
     c._fallback_enabled = False
     c._conversation_from_frames = lambda: []
     sessions = ['session-' + str(i) for i in range(count)]
-    choices = {sid: ['medium', 'high', 'max'][i % 3] for i, sid in enumerate(sessions)}
-    def dispatch(name, args):
+    choices = {sid: ['high', 'max'][i % 2] for i, sid in enumerate(sessions)}
+    def dispatch(name, args, **kwargs):
         sid = args['user_message']
         return {'ok': True, 'mode': 'active', 'review': {
             'scenario': 'ordinary', 'disposition': 'uncertain', 'confidence': .1,
@@ -402,7 +403,7 @@ def test_parallel_active_required_effort_http_and_feedback_are_session_isolated(
                 for sid in sessions}
         try:
             barrier.wait(timeout=3)
-            assert seen == {sid: c.KIMI_EFFORT_MAP[choices[sid]] for sid in sessions}
+            assert seen == {sid: choices[sid] for sid in sessions}
             release.set()
             for sid, job in jobs.items():
                 result = job.result(timeout=3)
@@ -416,16 +417,16 @@ def test_parallel_active_required_effort_http_and_feedback_are_session_isolated(
 
 
 @pytest.mark.parametrize('minimum,maximum,expected_min,expected_max', [
-    ('low', 'xhigh', 'medium', 'max'),
-    ('minimal', 'max', 'medium', 'max'),
-    ('medium', 'max', 'medium', 'max'),
+    ('low', 'xhigh', 'high', 'max'),
+    ('minimal', 'max', 'high', 'max'),
+    ('medium', 'max', 'high', 'max'),
     ('unknown', 'none', 'max', 'max'),
 ])
-def test_legacy_config_cannot_request_below_medium_or_above_canonical_max(critic, minimum, maximum, expected_min, expected_max):
+def test_legacy_config_cannot_request_below_high_or_above_canonical_max(critic, minimum, maximum, expected_min, expected_max):
     c = critic
     register(c, c._provider_state, {'min_effort': minimum, 'max_effort': maximum})
     assert c._min_effort == expected_min and c._max_effort == expected_max
-    assert c._pick_effort('Short draft', 0, False, []) in {'medium', 'high', 'max'}
+    assert c._pick_effort('Short draft', 0, False, []) in {'high', 'max'}
 
 
 @pytest.mark.parametrize('operation', ['failure', 'success', 'begin'])

@@ -91,7 +91,7 @@ def test_five_cooperative_outcome_dispatches_have_independent_session_capacity()
     from types import SimpleNamespace
     c=load();barrier=threading.Barrier(6);seen=set();lock=threading.Lock()
     c._outcome_review_enabled=True;c._outcome_review_mode='active'
-    def dispatch(name,args):
+    def dispatch(name,args,**kwargs):
         assert name=='scenario_review_outcome'
         with lock:seen.add(args['user_message'])
         barrier.wait(timeout=3)

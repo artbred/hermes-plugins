@@ -4,18 +4,18 @@ A shared repository for custom [Hermes Agent](https://github.com/NousResearch/he
 
 ## Plugins
 
-- [response-critic](plugins/response-critic/) **1.6.0** — Jev-controlled optional pre-delivery verification, medium-to-max reasoning, persistent provider failure circuits, internal-notification guards and verified-note acknowledgments. Judge chain: Kimi → OpenRouter Muse Spark Contributor at the requested effort.
-- [scenario-router](plugins/scenario-router/) **0.4.0** — outcome-only Jev reviewer, independent judge-needed/effort decisions, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
+- [response-critic](plugins/response-critic/) **1.7.0** — Jev-controlled optional pre-delivery verification, high/max reasoning, persistent provider failure circuits, internal-notification guards and verified-note acknowledgments. Judge chain: Kimi → OpenRouter Muse Spark Contributor at the requested effort.
+- [scenario-router](plugins/scenario-router/) **0.5.0** — outcome-only Jev reviewer, independent judge-needed/effort decisions, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
 
 ## Execution contract
 
 **The full agent always runs first.** No incoming classifier call, deterministic pre-run scenario router or fast-path skipped agent turn. Jev reviews the completed draft and supplied redacted execution evidence.
 
-Shadow mode records its proposed handling without changing replies or actions. Active cooperative handling can skip the generative judge only on an explicit high-confidence Jev skip decision, request bounded correction/recovery, or shorten a confirmed saved-note reply to `Added.`. When judging is required, Jev chooses `medium`, `high`, or `max`; uncertain/unavailable policy requires `max`. Kimi rounds unsupported `medium` upward to `high`, while OpenRouter receives the requested effort. Both plugins persist failure cooldowns across reloads. The agent itself must store and verify the note; these plugins do not write memory or launch/cancel background jobs. Main-model thinking, audio delivery, model/provider switching and session-sticky fallback are not changed.
+Shadow mode records its proposed handling without changing replies or actions. Active cooperative handling can skip the generative judge only on an explicit high-confidence Jev skip decision, request bounded correction/recovery, or shorten a confirmed saved-note reply to `Added.`. When judging is required, Jev chooses only `high` or `max`; uncertain/unavailable policy requires `max`. Provider capabilities resolve maximum to `max`, otherwise `xhigh`, otherwise `high`. No review request uses medium/low/none. Both plugins persist failure cooldowns across reloads. The agent itself must store and verify the note; these plugins do not write memory or launch/cancel background jobs. Main-model thinking, audio delivery, model/provider switching and session-sticky fallback are not changed.
 
 Post-run review cannot authorize or undo an already-executed external action. Existing tool approvals remain in place. Safety refusals must not become alternate-model bypasses.
 
-See [design and validation](docs/design.md) and [current validation results](docs/validation.md).
+See [design and validation](docs/design.md), [current active-review checks](docs/active-review.md), and the separate [future main-reasoning/request-pool design](docs/main-reasoning-pool.md).
 
 ## Installation
 
@@ -30,7 +30,7 @@ hermes config set plugins.entries.scenario-router.settings.mode active
 hermes config set plugins.entries.response-critic.settings.critic_mode active
 hermes config set plugins.entries.response-critic.settings.outcome_review_enabled true
 hermes config set plugins.entries.response-critic.settings.outcome_review_mode active
-hermes config set plugins.entries.response-critic.settings.min_effort medium
+hermes config set plugins.entries.response-critic.settings.min_effort high
 hermes config set plugins.entries.response-critic.settings.max_effort max
 hermes config set plugins.entries.response-critic.settings.provider_cooldown_seconds 300
 hermes config set plugins.entries.response-critic.settings.provider_max_cooldown_seconds 3600

@@ -6,7 +6,7 @@ import pytest
 from test_router import r, ctx, decision, fixture, pick, state
 
 
-def policy(required='required', effort='medium', rc=.99, ec=.98, **kwargs):
+def policy(required='required', effort='high', rc=.99, ec=.98, **kwargs):
     payload = decision(**kwargs)
     payload['answers']['judge_required'] = pick('judge_required', required, rc)
     payload['answers']['judge_effort'] = pick('judge_effort', effort, ec)
@@ -26,12 +26,12 @@ def assert_conservative(result):
 def test_atomic_questions_and_unchanged_five_field_tool():
     assert set(r.QUESTIONS) == {'outcome', 'verdict', 'memory_evidence', 'judge_required', 'judge_effort'}
     assert set(r.QUESTIONS['judge_required']['criteria']) == {'required', 'skip'}
-    assert set(r.QUESTIONS['judge_effort']['criteria']) == {'medium', 'high', 'max'}
+    assert set(r.QUESTIONS['judge_effort']['criteria']) == {'high', 'max'}
     assert set(r.TOOL_SCHEMA['parameters']['properties']) == set(r.STATE_FIELDS)
     assert len(r.STATE_FIELDS) == 5
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 @pytest.mark.parametrize('outcome_confidence', [.4, .93, .99])
 def test_required_effort_independent_of_scenario_confidence(effort, outcome_confidence):
     payload = policy(effort=effort)
@@ -93,8 +93,8 @@ def test_uncertain_required_policy_falls_back_to_max(dimension):
     assert_conservative(review(payload))
 
 
-@pytest.mark.parametrize('effort', ['low', 'none', 'minimal', 'xhigh'])
-def test_no_below_medium_or_provider_specific_label(effort):
+@pytest.mark.parametrize('effort', ['medium', 'low', 'none', 'minimal', 'xhigh'])
+def test_no_below_high_or_provider_specific_label(effort):
     payload = policy()
     payload['answers']['judge_effort']['choice'] = effort
     assert_conservative(review(payload))
@@ -111,7 +111,7 @@ def test_explicit_high_confidence_skip_for_supported_ready_outcomes(outcome, ext
     result = review(payload, **extra)
     assert result['judge_required'] is False
     assert result['judge_confidence'] == .99
-    assert result['verifier_effort'] == 'medium'
+    assert result['verifier_effort'] == 'high'
     assert result['applied'] is False
 
 
@@ -227,7 +227,7 @@ def test_capture_marks_dropped_tool_events_incomplete_without_authorizing_skip(m
 
 @pytest.mark.parametrize('expected_policy', [
     {'judge_required': False},
-    {'judge_required': 0, 'verifier_effort': 'medium'},
+    {'judge_required': 0, 'verifier_effort': 'high'},
     {'judge_required': False, 'verifier_effort': 'low'},
     {'judge_required': False, 'verifier_effort': []},
 ])
@@ -242,7 +242,7 @@ def test_evaluation_rejects_invalid_or_partial_expected_policy(tmp_path, expecte
 
 def test_evaluation_policy_expectations_are_independent_and_checked(tmp_path):
     row = fixture()
-    row['expected'].update(judge_required=False, verifier_effort='medium')
+    row['expected'].update(judge_required=False, verifier_effort='high')
     path = tmp_path / 'synthetic.jsonl'
     path.write_text(json.dumps(row))
     summary, records = r.evaluate(path, r.DEFAULTS)

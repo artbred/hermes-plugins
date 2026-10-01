@@ -17,7 +17,7 @@ def load(name, file):
     return module
 
 
-@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+@pytest.mark.parametrize('effort', ['high', 'max'])
 @pytest.mark.parametrize('weak_dimension', ['outcome', 'verdict', 'none'])
 def test_required_effort_survives_real_scenario_abstention(monkeypatch, effort, weak_dimension):
     router = load('paired_router', ROOT / 'scenario-router' / '__init__.py')
@@ -45,7 +45,7 @@ def test_required_effort_survives_real_scenario_abstention(monkeypatch, effort, 
     assert decision['review']['judge_required'] is True
     assert decision['review']['verifier_effort'] == effort
     critic._plugin_context = SimpleNamespace(has_plugin=lambda _: True,
-                                            dispatch_tool=lambda *_: json.dumps(decision))
+                                            dispatch_tool=lambda *_, **kw: json.dumps(decision))
     critic._outcome_review_enabled = True
     critic._outcome_review_mode = 'active'
     critic._critic_mode = 'active'
