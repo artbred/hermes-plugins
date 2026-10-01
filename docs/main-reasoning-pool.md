@@ -6,6 +6,8 @@ The implemented advisor is outcome-only. It sees a completed full-agent run and 
 
 A model/provider configured in Hermes can expose a main-session reasoning level; the installed profile presently configures high. This is not a learned per-request selector. Do not describe a configured reviewer policy or a historical example pool as live main-agent routing.
 
+A separate passive `reasoning-shadow` plugin now implements pre-input recommendations and a private SQLite/FTS5 example pool. It does not apply recommendations or lower main reasoning; see [the shadow engine](shadow-engine.md) for its boundaries and checks. The request-family activation design below remains a later phase.
+
 ## Proposed request-family pool
 
 If main-agent selection is later authorized, keep an incoming decision separate from outcome review, and retain normal agent execution and tool approvals. Retrieve a few similar *verified* examples plus relevant recent conversation, then ask for main-effort choice/confidence. Use low only for high-confidence familiar low-risk requests; novel, ambiguous, consequential or previously failing families must escalate. The full agent still executes the real action and verifies its effect. Previously successful storage does not authorize a new success acknowledgment.

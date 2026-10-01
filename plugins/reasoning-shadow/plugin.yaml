@@ -1,0 +1,44 @@
+name: reasoning-shadow
+version: 0.1.0
+description: "Passive pre-input main-effort calibration and private request examples. Never applies recommendations."
+author: Artem
+kind: standalone
+provides_hooks: [pre_llm_call, pre_api_request, post_api_request, post_tool_call, post_llm_call, on_session_reset]
+config_schema:
+  mode:
+    type: str
+    choices: ['off', shadow]
+    default: 'off'
+  allow_synthetic_capture:
+    type: bool
+    default: false
+  classifier_model:
+    type: str
+    default: typesafe/jev-1.13
+  timeout_seconds:
+    type: int
+    default: 12
+  max_input_characters:
+    type: int
+    default: 48000
+  confidence_threshold:
+    type: float
+    default: 0.90
+  queue_size:
+    type: int
+    default: 64
+  queue_ttl_seconds:
+    type: int
+    default: 600
+  max_examples:
+    type: int
+    default: 2000
+  retention_days:
+    type: int
+    default: 90
+  max_cached_turns:
+    type: int
+    default: 256
+  max_event_keys:
+    type: int
+    default: 256
