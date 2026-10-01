@@ -1179,7 +1179,7 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
                             "turn_id": context["turn_id"], "draft": text,
                         }
                         return None
-            if disposition in {"correct", "recover"}:
+            if may_skip and disposition in {"correct", "recover"}:
                 continuation = _outcome_continuation(review, session_id)
                 if continuation:
                     return continuation

@@ -586,7 +586,8 @@ def test_inactive_remote_mode_cannot_supply_policy_effort(critic, monkeypatch, m
 
 @pytest.mark.parametrize('disposition', ['correct', 'recover'])
 @pytest.mark.parametrize('policy', ['required', 'low-confidence', 'missing', 'invalid'])
-def test_high_confidence_agent_continuation_is_independent_of_judge_policy(critic, disposition, policy):
+@pytest.mark.parametrize('passed', [True, False])
+def test_high_confidence_recovery_cannot_bypass_required_or_unknown_judge(critic, disposition, policy, passed):
     result = envelope(disposition, confidence=.97, feedback=CHALLENGE['feedback'],
                       judge_required=True, verifier_effort='medium')
     if policy == 'low-confidence':
@@ -598,10 +599,15 @@ def test_high_confidence_agent_continuation_is_independent_of_judge_policy(criti
         result['review']['judge_required'] = 'true'
         result['review']['judge_confidence'] = True
     connect(critic, result)
+    critic._judge.return_value = (PASS if passed else CHALLENGE, 'mock-kimi')
     continuation = critic.validate_final_response(DRAFT, session_id='s')
-    assert continuation['action'] == 'continue'
-    assert CHALLENGE['feedback'] in continuation['message']
-    critic._judge.assert_not_called()
+    if passed:
+        assert continuation is None
+    else:
+        assert continuation['action'] == 'continue'
+        assert CHALLENGE['feedback'] in continuation['message']
+    critic._judge.assert_called_once()
+    assert critic._judge.call_args.args[1] == ('medium' if policy == 'required' else 'max')
 
 
 @pytest.mark.parametrize('disposition', ['correct', 'recover'])

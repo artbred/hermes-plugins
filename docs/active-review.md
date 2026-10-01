@@ -16,8 +16,8 @@ The Jev plugin persists its own transport/HTTP/schema backoff: default 30 second
 
 ## Exercised checks
 
-- Combined Python 3.11.15 regression run: **520 passed**, including real Hermes PluginManager discovery/dispatch, forced-reload persistence, profile isolation, concurrent sessions and adapter request payloads.
-- Six paired cross-plugin regressions use explicit synthetic typed decisions to verify that required medium/high/max survives low outcome or readiness confidence through the actual envelope boundary.
+- Combined Python 3.11.15 regression run: **531 passed**, including real Hermes PluginManager discovery/dispatch, forced-reload persistence, profile isolation, concurrent sessions and adapter request payloads.
+- Nine paired cross-plugin regressions use explicit synthetic typed decisions to verify that required medium/high/max survives low outcome or readiness confidence through the actual envelope boundary and is not bypassed by a recovery disposition.
 - Unmocked live public-input smoke used the real PluginManager and active pre_verify callback. Jev returned a valid accept scenario but its skip-policy confidence was 0.92, below the 0.97 threshold; the conservative required/max behavior remained in place.
 - A real OpenRouter fallback request at medium returned a valid passing verdict for a public synthetic arithmetic check. This establishes transport support, not comprehensive factual correctness or scenario calibration.
 

@@ -18,13 +18,15 @@ def load(name, file):
 
 
 @pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
-@pytest.mark.parametrize('weak_dimension', ['outcome', 'verdict'])
+@pytest.mark.parametrize('weak_dimension', ['outcome', 'verdict', 'none'])
 def test_required_effort_survives_real_scenario_abstention(monkeypatch, effort, weak_dimension):
     router = load('paired_router', ROOT / 'scenario-router' / '__init__.py')
     critic = load('paired_critic', ROOT / 'response-critic' / '__init__.py')
     choices = {'outcome': 'normal_answer', 'verdict': 'ready',
                'memory_evidence': 'not_applicable', 'judge_required': 'required',
                'judge_effort': effort}
+    if weak_dimension == 'none':
+        choices['outcome'] = 'technical_failure'
     answers = {}
     for name, label in choices.items():
         criteria = router.QUESTIONS[name]['criteria']
@@ -37,7 +39,9 @@ def test_required_effort_survives_real_scenario_abstention(monkeypatch, effort, 
              'internal': False, 'pending_background': False}
     cfg = {**router.DEFAULTS, 'mode': 'active'}
     decision = router.review_envelope({'answers': answers}, state, cfg)
-    assert decision['ok'] is False
+    assert decision['ok'] is (weak_dimension == 'none')
+    if weak_dimension == 'none':
+        assert decision['review']['disposition'] == 'recover'
     assert decision['review']['judge_required'] is True
     assert decision['review']['verifier_effort'] == effort
     critic._plugin_context = SimpleNamespace(has_plugin=lambda _: True,
