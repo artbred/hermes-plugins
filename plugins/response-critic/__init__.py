@@ -4,7 +4,7 @@ The original agent runs first with its normal tools. A validated cooperative
 review may accept its outcome, authorize a terse verified-memory acknowledgment,
 or send correction/recovery guidance back through the existing ``pre_verify``
 continuation gate. Default standalone behavior remains Kimi K3 followed by
-OpenRouter Muse Spark Contributor at maximum reasoning effort.
+OpenRouter Muse Spark Contributor with bounded medium-to-maximum reasoning.
 
 Non-file verification uses a plugin-only compatibility adapter that stamps a
 transient .md sentinel into the agent's private mutation set. No file or core
@@ -21,6 +21,10 @@ import datetime
 import threading
 import time
 import contextvars
+import hashlib
+import math
+from contextlib import contextmanager
+from email.utils import parsedate_to_datetime
 import httpx
 
 logger = logging.getLogger("hermes.plugin.response_critic")
@@ -33,14 +37,23 @@ OPENROUTER_TIMEOUT = 300.0  # Both providers share the five-minute caller deadli
 # Doc extension on purpose: filtered by agent/verification_stop.py.
 SENTINEL = ".hermes/response-critic-gate.md"
 
-# Internal ladder (OpenRouter-style names). Kimi K3 accepts only low/high/max.
-EFFORT_LADDER = ["minimal", "low", "medium", "high", "xhigh", "max"]
-DEFAULT_MIN_EFFORT = "low"
-DEFAULT_MAX_EFFORT = "xhigh"
-KIMI_EFFORT_MAP = {
-    "minimal": "low", "low": "low", "medium": "high",
-    "high": "high", "xhigh": "max", "max": "max",
-}
+# Canonical bounded contract. Unsupported Kimi medium is rounded UP, never down.
+EFFORT_LADDER = ["medium", "high", "max"]
+DEFAULT_MIN_EFFORT = "medium"
+DEFAULT_MAX_EFFORT = "max"
+KIMI_EFFORT_MAP = {"medium": "high", "high": "high", "max": "max"}
+
+
+def _bounded_effort(name):
+    """All judge adapters must use this boundary, including future providers."""
+    if isinstance(name, str):
+        if name in EFFORT_LADDER:
+            return name
+        if name in {"minimal", "low"}:  # legacy configuration, never low on wire
+            return "medium"
+        if name == "xhigh":
+            return "max"
+    return "max"  # unknown effort cannot silently disable reasoning
 
 DEFAULT_JUDGE_MODEL = "k3"
 DEFAULT_JUDGE_BASE_URL = "https://api.kimi.com/coding/v1"
@@ -58,6 +71,12 @@ _fallback_enabled = True
 _fallback_effort = DEFAULT_FALLBACK_EFFORT
 _review_budget_seconds = 300.0
 _provider_cooldown_seconds = 300.0
+_provider_max_cooldown_seconds = 3600.0
+_provider_failure_threshold = 2
+_provider_state = None
+_failure_scope: contextvars.ContextVar = contextvars.ContextVar('response_critic_failure_scope', default=None)
+_provider_attempt: contextvars.ContextVar = contextvars.ContextVar('response_critic_provider_attempt', default=None)
+_FAILURE_STATE_KEY = 'provider_failure_cache_v1'
 _judge_deadline = contextvars.ContextVar('response_critic_deadline', default=None)
 _review_session = contextvars.ContextVar('response_critic_session', default=None)
 _review_workers = {}
@@ -71,14 +90,193 @@ def _request_timeout(default):
     return max(.001, min(default, deadline - time.monotonic())) if deadline is not None else min(default, _review_budget_seconds)
 
 
-def _provider_available(name):
+def _cache_scope():
+    captured = _failure_scope.get()
+    if captured is not None:
+        return captured
+    state = _provider_state
+    # Resolve the facade and its profile directory on the calling hook thread.
+    directory = getattr(state, 'data_dir', None) if state is not None else None
+    return state, directory
+
+
+def _provider_key(name):
+    model, base = ((_judge_model, _judge_base_url or DEFAULT_JUDGE_BASE_URL) if name == 'kimi' else
+                   (_fallback_model, 'https://openrouter.ai/api/v1'))
+    # No URLs/model metadata, credentials or provider bodies enter durable state.
+    return hashlib.sha256(json.dumps([name, model, base.rstrip('/')],
+                                    separators=(',', ':')).encode()).hexdigest()
+
+
+@contextmanager
+def _cache_transaction():
+    """Serialize read/modify/write across sessions, module reloads and processes.
+
+    PluginState.set is atomic per key, but get+set is NOT a transaction. A separate
+    advisory lock makes the bounded cache map update atomic without host internals.
+    In-memory fallback is only for unavailable state/older hosts (not reload durable).
+    """
+    state, directory = _cache_scope()
     with _provider_backoff_lock:
-        return time.monotonic() >= _provider_backoff.get(name, 0)
+        handle = None
+        fallback_key = str(directory) if directory is not None else id(state)
+        fallback = _provider_backoff.setdefault(fallback_key, {})
+        try:
+            if directory is not None:
+                import fcntl
+                directory.mkdir(parents=True, exist_ok=True)
+                lock_path = directory / 'provider-failure-cache.lock'
+                fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                handle = os.fdopen(fd, 'a+')
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            # A captured worker must not write another profile after scope changes.
+            if directory is not None and getattr(state, 'data_dir', None) != directory:
+                raise RuntimeError('provider cache profile scope changed')
+            data = state.get(_FAILURE_STATE_KEY, {}) if state is not None else fallback
+            if not isinstance(data, dict):
+                raise ValueError('invalid provider cache')
+            if state is not None and fallback:
+                data = {**data, **fallback}
+        except Exception as exc:
+            logger.warning('Critic: durable provider cache unavailable (%s)', type(exc).__name__)
+            state, data = None, fallback
+        before = dict(data)
+        try:
+            yield data
+            # Bound retained metadata independently of profile/model churn.
+            while len(data) > 128:
+                data.pop(next(iter(data)))
+            if state is not None:
+                try:
+                    if data != before or fallback:
+                        state.set(_FAILURE_STATE_KEY, data)
+                        fallback.clear()
+                except Exception as exc:
+                    logger.warning('Critic: provider cache persist failed (%s)', type(exc).__name__)
+                    fallback.clear()
+                    fallback.update(data)
+        finally:
+            if handle is not None:
+                handle.close()  # closing also releases flock, even after a state failure
+
+
+def _cache_entry(data, key):
+    row = data.get(key, {})
+    if not isinstance(row, dict):
+        return {}
+    # Corrupt persisted metadata may not create infinite or NaN cooldowns.
+    for field in ('failures', 'open_count', 'until', 'probe_until'):
+        value = row.get(field, 0)
+        if type(value) not in {int, float} or not math.isfinite(value) or value < 0:
+            return {}
+    if any(row.get(field, 0) > time.time() + 3600 for field in ('until', 'probe_until')):
+        return {}
+    return row
+
+
+def _provider_available(name):
+    with _cache_transaction() as data:
+        row = _cache_entry(data, _provider_key(name))
+        return time.time() >= max(row.get('until', 0), row.get('probe_until', 0))
+
+
+def _begin_provider(name):
+    """After cooldown, lease a single bounded probe; healthy sessions remain parallel."""
+    with _cache_transaction() as data:
+        if not _cache_result_current():
+            return False
+        key, now = _provider_key(name), time.time()
+        row = dict(_cache_entry(data, key))
+        if now < max(row.get('until', 0), row.get('probe_until', 0)):
+            return False
+        if row.get('until', 0):
+            row['probe_until'] = now + _request_timeout(_review_budget_seconds)
+            data[key] = row
+        return True
+
+
+def _retry_after(value):
+    try:
+        delay = float(value)
+    except (ValueError, TypeError):
+        try:
+            delay = parsedate_to_datetime(value).timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError):
+            return 0.0
+    return min(delay, _provider_max_cooldown_seconds) if math.isfinite(delay) and delay > 0 else 0.0
+
+
+def _cache_result_current():
+    deadline = _judge_deadline.get()
+    return deadline is None or time.monotonic() < deadline
+
+
+def _record_provider_failure(name, category, status=None, retry_after=None):
+    category = category if category in {'network', 'http', 'schema'} else 'network'
+    status = status if type(status) is int and 100 <= status <= 599 else None
+    attempt = _provider_attempt.get()
+    if attempt is not None:
+        if attempt.get('recorded'):
+            return
+        attempt['recorded'] = True
+    # Abandoned workers cannot change the circuit after their caller's deadline.
+    if not _cache_result_current():
+        return
+    with _cache_transaction() as data:
+        if not _cache_result_current():
+            return  # the shared deadline can expire while acquiring the lock
+        key = _provider_key(name)
+        row = dict(_cache_entry(data, key))
+        count = int(row.get('failures', 0)) + 1
+        opened = int(row.get('open_count', 0))
+        immediate = status in {401, 403, 429}
+        until = 0
+        if immediate or count >= _provider_failure_threshold:
+            opened += 1
+            cooldown = min(_provider_max_cooldown_seconds,
+                           _provider_cooldown_seconds * (2 ** min(opened - 1, 16)))
+            cooldown = max(cooldown, _retry_after(retry_after))
+            until = time.time() + cooldown
+        data[key] = {'failures': count, 'open_count': opened, 'until': until,
+                     'probe_until': 0, 'category': category, 'status': status}
+
+
+def _record_provider_success(name):
+    attempt = _provider_attempt.get()
+    if attempt is not None:
+        if attempt.get('recorded'):
+            return
+        attempt['recorded'] = True
+    if not _cache_result_current():
+        return
+    with _cache_transaction() as data:
+        if not _cache_result_current():
+            return
+        # Only a validated schema verdict, INCLUDING passed:false, resets failures.
+        data[_provider_key(name)] = {'failures': 0, 'open_count': 0,
+                                    'until': 0, 'probe_until': 0}
 
 
 def _cool_provider(name):
-    with _provider_backoff_lock:
-        _provider_backoff[name] = time.monotonic() + _provider_cooldown_seconds
+    """Compatibility helper for quota exhaustion; uses the same durable circuit."""
+    _record_provider_failure(name, 'http', status=429)
+
+
+def _record_provider_refusal(name):
+    """Safety abstention blocks fallback, but is not a valid schema reset or outage."""
+    attempt = _provider_attempt.get()
+    if attempt is not None:
+        attempt['recorded'] = True
+    if not _cache_result_current():
+        return
+    with _cache_transaction() as data:
+        if not _cache_result_current():
+            return
+        key = _provider_key(name)
+        row = dict(_cache_entry(data, key))
+        if row.get('probe_until'):
+            row['probe_until'] = 0
+            data[key] = row
 
 # Optional cooperative policy; standalone behavior stays enabled and unchanged.
 _plugin_context = None
@@ -367,10 +565,7 @@ def _ensure_logging() -> None:
 
 
 def _clamp_effort(name: str) -> int:
-    try:
-        return EFFORT_LADDER.index(name)
-    except ValueError:
-        return EFFORT_LADDER.index(DEFAULT_MIN_EFFORT)
+    return EFFORT_LADDER.index(_bounded_effort(name))
 
 
 def _pick_effort(text: str, attempt: int, coding: bool, changed_paths) -> str:
@@ -613,10 +808,43 @@ def _parse_verdict(content: str):
     return None
 
 
-def _judge_kimi(user_message: str, effort: str, system: str):
-    """Primary judge: Kimi K3 on the kimi-coding chat_completions wire."""
-    if not _provider_available("kimi"):
+def _judge_http(name, url, headers, payload, timeout):
+    """Shared transport/accounting: technical failures never lower requested effort."""
+    if not _begin_provider(name):
         return None
+    try:
+        with httpx.Client(timeout=_request_timeout(timeout)) as client:
+            resp = client.post(url, headers=headers, json=payload)
+    except Exception as exc:
+        _record_provider_failure(name, 'network')
+        logger.warning('Critic %s request unavailable (%s)', name, type(exc).__name__)
+        return None
+    if resp.status_code != 200:
+        logger.warning('Critic %s request failed: HTTP %s', name, resp.status_code)
+        _record_provider_failure(name, 'http', status=resp.status_code,
+                                 retry_after=resp.headers.get('Retry-After'))
+        return None
+    try:
+        choice = resp.json()['choices'][0]
+        message = choice['message']
+        if message.get('refusal') or choice.get('finish_reason') == 'content_filter':
+            # A provider safety boundary is not a technical outage or fallback cue.
+            _record_provider_refusal(name)
+            return {'passed': False, 'feedback': (
+                'Respect the safety refusal. Do not switch models or providers to bypass it.')}
+        verdict = _parse_verdict(message['content'])
+    except Exception:
+        verdict = None
+    if not _valid_judge_verdict(verdict):
+        _record_provider_failure(name, 'schema')
+        logger.warning('Critic: invalid verdict from %s; trying next provider', name)
+        return None
+    _record_provider_success(name)
+    return verdict
+
+
+def _judge_kimi(user_message: str, effort: str, system: str):
+    """Primary judge: Kimi K3, medium rounded upward to supported high."""
     api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("KIMI_CODING_API_KEY")
     if not api_key:
         logger.warning("Critic: KIMI_API_KEY not set — primary judge unavailable")
@@ -625,7 +853,7 @@ def _judge_kimi(user_message: str, effort: str, system: str):
     payload = {
         "model": _judge_model,
         "response_format": {"type": "json_object"},
-        "reasoning_effort": KIMI_EFFORT_MAP.get(effort, "low"),
+        "reasoning_effort": KIMI_EFFORT_MAP[_bounded_effort(effort)],
         "max_tokens": 4000,
         "messages": [
             {"role": "system", "content": _redact_for_review(system)},
@@ -638,16 +866,7 @@ def _judge_kimi(user_message: str, effort: str, system: str):
         # Moonshot's brotli SSE decode is broken in httpx; gzip only.
         "Accept-Encoding": "gzip",
     }
-    with httpx.Client(timeout=_request_timeout(REQUEST_TIMEOUT)) as client:
-        resp = client.post(f"{base}/chat/completions", headers=headers, json=payload)
-        if resp.status_code != 200:
-            logger.warning(
-                "Critic kimi request failed: HTTP %s", resp.status_code
-            )
-            if resp.status_code in {401, 403, 429}:
-                _cool_provider("kimi")
-            return None
-        return _parse_verdict(resp.json()["choices"][0]["message"]["content"])
+    return _judge_http('kimi', f'{base}/chat/completions', headers, payload, REQUEST_TIMEOUT)
 
 
 
@@ -666,16 +885,14 @@ def _valid_judge_verdict(verdict) -> bool:
 
 
 def _judge_openrouter(user_message: str, effort: str, system: str):
-    """OpenRouter fallback at configured maximum effort; never silently downgrade."""
-    if not _provider_available("openrouter-fallback"):
-        return None
+    """OpenRouter fallback preserves canonical requested effort and parameter support."""
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         return None
     payload = {
         "model": _fallback_model,
         "response_format": {"type": "json_object"},
-        "reasoning": {"effort": _fallback_effort},
+        "reasoning": {"effort": _bounded_effort(effort)},
         "max_tokens": 16384,
         "provider": {"require_parameters": True},
         "messages": [
@@ -684,17 +901,8 @@ def _judge_openrouter(user_message: str, effort: str, system: str):
         ],
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=_request_timeout(OPENROUTER_TIMEOUT)) as client:
-        resp = client.post("https://openrouter.ai/api/v1/chat/completions",
-                           headers=headers, json=payload)
-        if resp.status_code != 200:
-            logger.warning(
-                "Critic openrouter request failed: HTTP %s", resp.status_code
-            )
-            if resp.status_code in {401, 403, 429}:
-                _cool_provider("openrouter-fallback")
-            return None
-        return _parse_verdict(resp.json()["choices"][0]["message"]["content"])
+    return _judge_http('openrouter-fallback', 'https://openrouter.ai/api/v1/chat/completions',
+                       headers, payload, OPENROUTER_TIMEOUT)
 
 
 def _bounded_result(callback, deadline, label, *, session_id=None):
@@ -749,7 +957,11 @@ def _bounded_result(callback, deadline, label, *, session_id=None):
 
 def _judge(user_message: str, effort: str, system: str):
     deadline = _judge_deadline.get() or time.monotonic() + _review_budget_seconds
-    result = _bounded_result(lambda: _judge_chain(user_message, effort, system), deadline, "judge")
+    token = _failure_scope.set(_cache_scope())
+    try:
+        result = _bounded_result(lambda: _judge_chain(user_message, _bounded_effort(effort), system), deadline, "judge")
+    finally:
+        _failure_scope.reset(token)
     return result if isinstance(result, tuple) else (None, "none")
 
 
@@ -763,7 +975,8 @@ def _review_outcome(text, session_id, evidence):
 
 
 def _judge_chain(user_message: str, effort: str, system: str):
-    """Kimi -> OpenRouter at maximum reasoning, preserving valid challenges."""
+    """Kimi -> OpenRouter at bounded requested effort, preserving valid challenges."""
+    effort = _bounded_effort(effort)
     providers = [("kimi", _judge_kimi)]
     if _fallback_enabled:
         providers.append(("openrouter-fallback", _judge_openrouter))
@@ -773,14 +986,22 @@ def _judge_chain(user_message: str, effort: str, system: str):
             break
         if not _provider_available(name):
             continue
+        # The transport accounts for each attempt; this guard also accommodates
+        # future adapters/mocks that raise or return an invalid schema directly.
+        token = _provider_attempt.set({'recorded': False})
         try:
             verdict = callback(user_message, effort, system)
             if _valid_judge_verdict(verdict):
+                _record_provider_success(name)
                 return verdict, name
             if verdict is not None:
+                _record_provider_failure(name, 'schema')
                 logger.warning("Critic: invalid verdict from %s; trying next provider", name)
         except Exception as exc:
+            _record_provider_failure(name, 'network')
             logger.warning("Critic %s unavailable (%s); trying next provider", name, type(exc).__name__)
+        finally:
+            _provider_attempt.reset(token)
     return None, "none"
 
 
@@ -802,7 +1023,7 @@ def _review_outcome_impl(text, session_id, evidence):
         })
         if isinstance(result, str):
             result = json.loads(result)
-        if not isinstance(result, dict) or result.get("ok") is not True:
+        if not isinstance(result, dict) or type(result.get("ok")) is not bool:
             return None
         if result.get("mode") not in {"shadow", "active", "off"}:
             return None
@@ -815,15 +1036,29 @@ def _review_outcome_impl(text, session_id, evidence):
                 or type(confidence) not in {int, float} or not math.isfinite(confidence)
                 or not 0 <= confidence <= 1
                 or not isinstance(review.get("feedback"), str)
-                or review.get("verifier_effort") != "max"
                 or review.get("applied") is not False
                 or review.get("acknowledgment") not in {None, "", "Added."}):
             return None
         if review["disposition"] == "acknowledge" and review.get("acknowledgment") != "Added.":
             return None
+        policy_confidence = review.get('judge_confidence')
+        valid_policy = (type(review.get('judge_required')) is bool
+                        and type(policy_confidence) in {int, float}
+                        and math.isfinite(policy_confidence) and 0 <= policy_confidence <= 1
+                        and isinstance(review.get('verifier_effort'), str)
+                        and review['verifier_effort'] in EFFORT_LADDER)
+        if not valid_policy or (result['ok'] is False and review.get('judge_required') is not True):
+            # Invalid policy and any skip accompanying scenario abstention
+            # require max effort. A valid required policy is independent of
+            # scenario confidence/readiness and can survive ok=false.
+            result = {**result, 'review': {**review, 'judge_required': True,
+                      'judge_confidence': 0.0, 'verifier_effort': 'max'}}
         # Never log input, raw answers, free-form scenario labels or feedback.
-        logger.info("Critic: outcome mode=%s disposition=%s confidence=%.3f",
-                    result["mode"], review["disposition"], confidence)
+        policy = result['review']
+        logger.info("Critic: outcome mode=%s disposition=%s confidence=%.3f "
+                    "judge_required=%s judge_confidence=%.3f effort=%s",
+                    result["mode"], review["disposition"], confidence,
+                    policy['judge_required'], policy['judge_confidence'], policy['verifier_effort'])
         return result
     except Exception as exc:
         logger.warning("Critic: outcome review unavailable (%s); using full judge", type(exc).__name__)
@@ -918,17 +1153,25 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
         return None
 
     evidence = _evidence_appendix(session_id=session_id) if _outcome_review_enabled else None
+    # The full agent has already run. Only the active intersection can authorize
+    # policy effects; a trusted required choice does not depend on scenario confidence.
+    force_full_review = (_outcome_review_enabled and _critic_mode == "active"
+                         and _outcome_review_mode == "active")
+    policy_effort = "max"
     outcome = _review_outcome(text, session_id, evidence or "")
-    if (_critic_mode == "active" and _outcome_review_mode == "active"
-            and outcome and outcome["mode"] == "active"):
+    if (force_full_review and outcome and outcome["mode"] == "active"):
         review = outcome["review"]
         disposition = review["disposition"]
-        if review["confidence"] >= _OUTCOME_CONFIDENCE:
-            if disposition == "accept":
+        trusted_policy = review["judge_confidence"] >= _OUTCOME_CONFIDENCE
+        if trusted_policy and review["judge_required"]:
+            policy_effort = review["verifier_effort"]
+        if outcome["ok"] is True and review["confidence"] >= _OUTCOME_CONFIDENCE:
+            may_skip = trusted_policy and review["judge_required"] is False
+            if may_skip and disposition == "accept":
                 return None
-            if disposition == "handoff" and _background_pending(session_id):
+            if may_skip and disposition == "handoff" and _background_pending(session_id):
                 return None
-            if disposition == "acknowledge" and _memory_confirmed(session_id):
+            if may_skip and disposition == "acknowledge" and _memory_confirmed(session_id):
                 with _context_lock:
                     context = _turn_context.get(session_id, {})
                     if context and not context.get("internal"):
@@ -940,16 +1183,13 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
                 continuation = _outcome_continuation(review, session_id)
                 if continuation:
                     return continuation
-        # Uncertain, refusal, low confidence and unconfirmed acknowledgment all
-        # use the existing full judge. Refusal never triggers recovery/rerouting.
+        # Untrusted policy, rejected skip and unknown/invalid results require max.
+        # Refusal never triggers recovery or agent/provider rerouting.
 
-    # Active abstention must run the full verifier, including short storage failures.
-    force_full_review = (_outcome_review_enabled and _critic_mode == "active"
-                         and _outcome_review_mode == "active")
-    # Shadow calls preserve all legacy skip/judge behavior.
+    # Shadow/standalone keep legacy triage. No legacy bypass may override Jev.
     if not force_full_review and len(text) < MIN_RESPONSE_CHARS:
         return None
-    if _is_background_handoff(text, session_id):
+    if not force_full_review and _is_background_handoff(text, session_id):
         logger.info("Critic: accepted async handoff")
         return None
     if not force_full_review and attempt == 0 and _triage_enabled and _looks_trivial(text):
@@ -959,7 +1199,7 @@ def validate_final_response(final_response: str = "", attempt: int = 0,
     with _feedback_lock:
         prior = list(_turn_feedback.get(key, ()))
 
-    effort = "max" if force_full_review else _pick_effort(text, attempt, coding, changed_paths)
+    effort = policy_effort if force_full_review else _pick_effort(text, attempt, coding, changed_paths)
 
     today = datetime.date.today().isoformat()
     system = JUDGE_PROMPT_TEMPLATE.format(today=today)
@@ -1026,7 +1266,12 @@ def register(ctx):
     global _fallback_model, _fallback_enabled, _fallback_effort
     global _plugin_context, _critic_mode, _outcome_review_enabled, _outcome_review_mode
     global _review_budget_seconds, _provider_cooldown_seconds
+    global _provider_max_cooldown_seconds, _provider_failure_threshold, _provider_state
     _plugin_context = ctx
+    try:
+        _provider_state = ctx.state
+    except Exception:
+        _provider_state = None
     for name, default in (("review_budget_seconds", 300.0), ("provider_cooldown_seconds", 300.0)):
         try:
             value = float(ctx.get_config(name, default))
@@ -1038,6 +1283,14 @@ def register(ctx):
             _review_budget_seconds = value
         else:
             _provider_cooldown_seconds = value
+    try:
+        maximum = float(ctx.get_config('provider_max_cooldown_seconds', 3600.0))
+        _provider_max_cooldown_seconds = maximum if 1 <= maximum <= 3600 else 3600.0
+    except (ValueError, TypeError):
+        _provider_max_cooldown_seconds = 3600.0
+    _provider_max_cooldown_seconds = max(_provider_cooldown_seconds, _provider_max_cooldown_seconds)
+    threshold = ctx.get_config('provider_failure_threshold', 2)
+    _provider_failure_threshold = threshold if type(threshold) is int and 1 <= threshold <= 100 else 2
     _critic_mode = str(ctx.get_config("critic_mode", "active") or "active").lower()
     if _critic_mode not in {"active", "shadow", "off"}:
         _critic_mode = "active"
@@ -1056,11 +1309,7 @@ def register(ctx):
             value = str(ctx.get_config(name, default) or default).strip().lower()
         except Exception:
             value = default
-        if value not in EFFORT_LADDER:
-            logger.warning(
-                f"response-critic: invalid {name}; using {default!r}"
-            )
-            value = default
+        value = _bounded_effort(value)
         if name == "min_effort":
             _min_effort = value
         else:
@@ -1090,7 +1339,7 @@ def register(ctx):
         pass
 
     logger.info(
-        f"response-critic ready: judge={_judge_model}@kimi fallback={_fallback_model} fallback_effort={_fallback_effort} "
+        f"response-critic ready: judge={_judge_model}@kimi fallback={_fallback_model} fallback_effort=requested "
         f"max_iterations={_max_iterations} effort={_min_effort}..{_max_effort} triage={_triage_enabled}"
     )
     ctx.register_hook("pre_gateway_dispatch", observe_gateway_input)

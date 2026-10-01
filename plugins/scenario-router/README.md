@@ -1,9 +1,9 @@
-# Scenario router v0.3.0: outcome-only Jev reviewer
+# Scenario router v0.4.0: outcome-only Jev judge policy
 
 The agent **always runs normally first**, including its own memory storage and
 readback. Jev then judges the outcome. There is no incoming scenario classifier,
 pre-run deterministic scenario policy, skipped agent run, or initial Jev request.
-The historical package name is retained; v0.2 does not route models.
+The historical package name is retained; this plugin does not route models.
 
 Production enablement/configuration is unchanged by this package update. No core
 patches, response-critic edits, provider switches, or external repository writes
@@ -12,8 +12,9 @@ are required. Python 3.10+ and `httpx` are the standalone dependencies.
 ## Implemented behavior
 
 - Atomic OpenRouter Decisions questions (`typesafe/jev-1.13`): `outcome`,
-  `verdict`, and `memory_evidence`. Not chat/completions or free-form generated
-  feedback. English and Russian synthetic examples are supplied.
+  `verdict`, `memory_evidence`, `judge_required` (`required`/`skip`) and
+  `judge_effort` (`medium`/`high`/`max`). Not chat/completions or free-form
+  generated feedback. English and Russian synthetic examples are supplied.
 - Strict label/distribution/confidence validation; errors, missing keys, invalid
   probabilities, and insufficient relevant confidence abstain toward a full verifier.
   Memory evidence confidence gates note acknowledgments, not unrelated technical
@@ -28,10 +29,13 @@ are required. Python 3.10+ and `httpx` are the standalone dependencies.
   `brain_dump_threshold` are required. Internal events and pending work never get
   this acknowledgment. Notes combined with real questions/tasks require normal
   answers. A verbose generated note essay can be replaced by `Added.` **by an
-  authorized consumer after full verification**, not by this plugin.
+  authorized consumer after confirming same-target execution evidence and following
+  the independent judge policy**, not by this plugin.
 - The public synchronous tool supports a cooperative verifier. Every recommendation
-  has `applied:false` and `verifier_effort:"max"`. These fields are advice, not an
-  assertion that another plugin's configuration or delivered response changed.
+  has `applied:false`, `judge_required`, `judge_confidence` and `verifier_effort`.
+  These fields are advice, not an assertion that another plugin's configuration or
+  delivered response changed. Jev independently selects whether another generative
+  judge is needed and, if so, medium, high or maximum provider reasoning.
 - A bounded in-memory turn capture records the latest redacted prompt, trusted
   provenance, and actual redacted tool evidence digests. Persisted `last_decision`
   and bounded `review_history` contain only validated labels, fixed feedback,
@@ -80,7 +84,9 @@ last two are booleans. The handler returns a **JSON string** with this envelope:
     "confidence": 0.99,
     "acknowledgment": "Added.",
     "feedback": "fixed allowlisted actionable text",
-    "verifier_effort": "max",
+    "judge_required": false,
+    "judge_confidence": 0.99,
+    "verifier_effort": "medium",
     "applied": false
   },
   "answers": {},
@@ -95,7 +101,9 @@ nonnegative numeric `input_tokens`, `output_tokens`, `cost`, when supplied.
 `acknowledgment` is otherwise the empty string. `ok=false` means unavailable,
 transport/validation failure, or insufficient confidence, not task completion.
 A valid ambiguous result can have `ok=true` but disposition `uncertain`.
-Consumers must check **mode and disposition**, not just `ok`.
+Consumers must check **mode, disposition, and independently validated judge
+policy**, not just `ok`. A valid required-judge policy can survive scenario
+abstention (`ok=false`); it never permits delivery actions from an invalid scenario.
 
 Outcome labels:
 `normal_answer`, `brain_dump_added`, `brain_dump_failed`, `technical_failure`,
@@ -103,6 +111,7 @@ Outcome labels:
 
 Verdict labels: `ready`, `correction_needed`, `uncertain`.
 Memory-evidence labels: `confirmed`, `not_confirmed`, `not_applicable`.
+Judge-required labels: `required`, `skip`. Judge-effort labels: `medium`, `high`, `max`.
 Dispositions: `accept`, `correct`, `recover`, `acknowledge`, `handoff`,
 `uncertain`, `refusal`. Local failures use scenario `uncertain`.
 
@@ -112,6 +121,44 @@ appropriate authorized tool/backend alternative and verified results, not a main
 model switch. Missing authorization must be requested, not manufactured. A
 cooperative verifier may continue the agent with these recommendations; this
 plugin never dispatches agent-action tools itself.
+
+## Independent judge policy
+
+The full agent is never skipped. `judge_required=false` means only that an
+**additional generative judge** may be omitted by an explicitly active,
+compatible consumer; it does not waive authorization, safety or local evidence
+checks. `disposition=accept` alone never skips a judge.
+
+- Missing, invalid or uncertain policy defaults to `judge_required:true`,
+  `verifier_effort:"max"`, `judge_confidence:0`. Both Choice schemas must validate.
+- Required-judge policy uses the minimum of `judge_required` and `judge_effort`
+  confidences; both must reach `confidence_threshold` (default .90). Scenario
+  confidence is separate: a usable required/medium or required/high policy is
+  retained even below .97, or when scenario readiness abstains. Do not reject
+  that policy merely because `ok=false` or scenario confidence is low.
+- Skip requires explicit `judge_required=skip` confidence at least
+  `judge_threshold` (default and minimum .97), a valid supported ready
+  `accept/normal_answer`, `acknowledge/brain_dump_added`, or
+  `handoff/async_handoff` pair, and equally strong relevant scenario/readiness
+  confidence. Note acknowledgments retain confirmed write/readback and all
+  existing brain-dump gates. The consumer still must check matching target IDs
+  or a trusted verified receipt before asserting storage. Handoffs additionally
+  need trusted `pending_background=true` and nonempty supporting evidence.
+- Internal notices, unknown/ambiguous scenarios, correction/recovery/refusal,
+  unready outcomes and known incomplete evidence cannot authorize skip. Effort
+  confidence is irrelevant to a valid skip; `judge_confidence` then uses only
+  the required/skip question. Malformed effort still fails conservatively.
+- `medium`, `high` and `max` are provider-neutral judge intentions, not a
+  main-agent reasoning change. The cooperating verifier maps `max` to the
+  provider's maximum supported reasoning; this plugin never sends a generative
+  provider request or emits below-medium/provider-specific labels such as `xhigh`.
+
+An active consumer must validate mode, field types/ranges and effort allowlist.
+It may honor valid **required** policy independently of scenario readiness;
+invalid policy must invoke a max-effort judge. **Skip** additionally requires
+high policy confidence and supported ready scenario/evidence checks. Shadow and
+off results never alter delivery or verifier behavior. These recommendations do
+not enable or configure the consumer automatically.
 
 ## Modes, hooks, privacy, and budgets
 
@@ -123,6 +170,9 @@ mode: shadow                      # shadow | active | 'off' (quote YAML off)
 judge_model: typesafe/jev-1.13
 confidence_threshold: 0.90         # provisional, not calibrated
 brain_dump_threshold: 0.97
+judge_threshold: 0.97              # skip confidence floor; may be tightened
+failure_cooldown_seconds: 30
+failure_max_cooldown_seconds: 300
 timeout_seconds: 8
 max_input_characters: 48000        # full serialized redacted state, characters
 max_cached_turns: 128
@@ -147,11 +197,24 @@ max_tool_characters: 12000         # per-event evidence digest cap
   unavailable/uncertain envelope without a Jev request. Disabled plugin vs
   enabled plugin in off mode are distinct.
 
-No decision cache is shared between hooks and explicit tool calls. The critic
-does not dispatch the outcome tool in shadow mode, avoiding a duplicate inline
+No successful-decision cache is shared between hooks and explicit tool calls.
+The critic does not dispatch the outcome tool in shadow mode, avoiding a duplicate inline
 request. An operator's explicit tool review still makes a separate synchronous
 request; automatic shadow observation is asynchronous and never starts an agent.
 A pre-run capture never requests Jev. Reviewer output is excluded from evidence.
+
+A profile-scoped persistent `jev_failure_cache` suppresses repeated transport,
+HTTP and malformed-schema failures in hooks and tool dispatch. Cooldown starts
+at 30 seconds, doubles on failed retries, and is capped at 300 seconds by default
+(configurable bounded budgets). It stores only a hashed endpoint/model reference,
+allowlisted error kind, bounded count and retry deadline. No raw input, API error
+body, secrets or failed answer is cached. Valid low-confidence classifications
+are not failures and reset backoff on success. Missing key, oversized input and
+caller validation errors are not cached. During cooldown the conservative
+required/max/zero-confidence policy is returned, never a cached success or skip.
+Different profiles/models do not reuse failures; unload discards late writes.
+Concurrent requests already in flight can still finish; the cache is not a
+profile-wide review admission cap.
 
 Internal notification status comes from trusted current history metadata
 (`display_kind=internal_notification` or host verifier-nudge flags), not matching
@@ -165,7 +228,7 @@ correlation; events without matching IDs are not guessed into a turn.
 The host `agent.redact.redact_sensitive_text` is used with forced secret and URL
 credential redaction. Standalone CLI use without Hermes has a conservative regex
 fallback, **not comprehensive PII removal**. Redaction failure drops evidence.
-Tool digests can be shortened with an explicit incomplete-evidence marker;
+Tool digests and omitted older tool events carry an explicit incomplete-evidence marker;
 original notes and final drafts are **never silently truncated**. Oversized full
 state abstains before HTTP. A cap is not a context-token guarantee. Missing key,
 HTTP/transport errors, malformed responses, and low confidence return uncertainty.
@@ -177,10 +240,13 @@ passing private text. Plugin logs/state do not include it, but the host's genera
 session history may record tool calls according to its own policy.
 
 Migration from v0.1: incoming intent/complexity classification and all input-policy
-functions are removed. `classifier_model` becomes `judge_model`; reasoning,
-fallback model, and verifier-effort settings no longer apply. Verifier effort is
-fixed to the recommendation `max`. Legacy `last_decision` metadata is replaced on
-the next review; old decision logs are not rewritten.
+functions are removed. `classifier_model` becomes `judge_model`; main-agent
+reasoning and fallback-model settings do not apply. From v0.3, judge policy is
+independent rather than a fixed `max` recommendation; missing legacy policy
+questions remain conservative required/max/zero confidence. Default mode remains
+shadow; package updates do not promote the installed configuration to active.
+Legacy `last_decision` metadata is replaced on the next review; old decision
+logs are not rewritten.
 
 ## Replay/evaluation without production enablement
 
@@ -207,7 +273,10 @@ python __init__.py --state-file path/to/outcome-state.json --live
 CLI does not load Hermes plugins, write configuration, or start an agent.
 Use portable paths of your choosing; do not put API keys in state/fixture files.
 
-Each nonempty fixture JSONL line requires:
+Each nonempty fixture JSONL line requires independent expected scenario/disposition
+labels. Optional `judge_required` (boolean) and `verifier_effort`
+(`medium`/`high`/`max`) expected fields must be supplied together; the bundled
+synthetic fixtures include both and test judge policy as well:
 
 ```json
 {
@@ -219,7 +288,8 @@ Each nonempty fixture JSONL line requires:
     "internal": false,
     "pending_background": false
   },
-  "expected": {"scenario": "normal_answer", "disposition": "accept"},
+  "expected": {"scenario": "normal_answer", "disposition": "accept",
+               "judge_required": false, "verifier_effort": "medium"},
   "decision_origin": "stored_live",
   "decision_response": {"answers": {}}
 }
@@ -236,8 +306,9 @@ they are never derived from actual model decisions. Ground-truth changes should
 be reviewed independently when calibrating live thresholds.
 
 Reports include total/matched/mismatched, valid reviews, abstentions, failed
-requests, malformed responses, scenario-confusion pairs, usage, and whether any
-replayed response is synthetic. Expected low-confidence abstention can match
+requests, malformed responses, required/skipped judge counts, scenario-confusion
+pairs, usage, and whether any replayed response is synthetic. Expected
+low-confidence abstention can match
 successfully. Exit status: `0` for matching evaluation without request/malformed
 response failures (or valid single review), `1` for mismatch/review failure,
 `2` for invalid input/CLI usage. No cached or synthetic fallback replaces failed
@@ -252,7 +323,9 @@ PYTHONPATH=path/to/hermes-agent python -m pytest tests -o addopts='' -q
 ```
 
 Tests cover public schema, mocked HTTP transport at the real Decisions endpoint,
-confidence/error abstention, write/readback semantics, acknowledgment gating,
+confidence/error abstention, independent required/skip and medium/high/max policy,
+conservative policy fallbacks, profile-scoped failure backoff and reload,
+write/readback semantics, acknowledgment gating,
 mixed-note answer behavior, refusal/no-bypass recommendations, pending/internal
 handling, redaction and metadata-only state, cache/history bounds, reset and
 session rotation, offline/live evaluation paths, CLI audit output, and real

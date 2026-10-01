@@ -1,6 +1,6 @@
 name: scenario-router
-version: 0.3.0
-description: "Outcome-only Jev reviewer and shadow evaluation. Recommendations only; no pre-run routing."
+version: 0.4.0
+description: "Outcome-only Jev optional-judge and reasoning policy. Recommendations only; no pre-run routing."
 author: Artem
 kind: standalone
 provides_tools: [scenario_review_outcome]
@@ -27,6 +27,18 @@ config_schema:
   brain_dump_threshold:
     type: float
     default: 0.97
+  judge_threshold:
+    type: float
+    default: 0.97
+    description: "Minimum confidence to propose skipping another generative judge; floor 0.97. Does not weaken scenario/evidence gates."
+  failure_cooldown_seconds:
+    type: int
+    default: 30
+    description: "Initial profile-scoped transport/HTTP/schema failure backoff (1–300 seconds)."
+  failure_max_cooldown_seconds:
+    type: int
+    default: 300
+    description: "Maximum failure backoff (1–3600 seconds, at least the initial cooldown)."
   max_cached_turns:
     type: int
     default: 128

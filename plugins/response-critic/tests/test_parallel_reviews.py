@@ -95,7 +95,7 @@ def test_five_cooperative_outcome_dispatches_have_independent_session_capacity()
         assert name=='scenario_review_outcome'
         with lock:seen.add(args['user_message'])
         barrier.wait(timeout=3)
-        return {'ok':True,'mode':'active','review':{'scenario':'normal_answer','disposition':'accept','confidence':1.0,'memory_verified':False,'feedback':'','verifier_effort':'max','applied':False,'acknowledgment':None}}
+        return {'ok':True,'mode':'active','review':{'scenario':'normal_answer','disposition':'accept','confidence':1.0,'judge_required':False,'judge_confidence':.99,'memory_verified':False,'feedback':'','verifier_effort':'max','applied':False,'acknowledgment':None}}
     c._plugin_context=SimpleNamespace(has_plugin=lambda name:True,dispatch_tool=dispatch)
     for i in range(5):
         c.capture_turn_context(session_id='chat-'+str(i),turn_id='turn-'+str(i),user_message='Task '+str(i))

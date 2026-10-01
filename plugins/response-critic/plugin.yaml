@@ -1,5 +1,5 @@
 name: response-critic
-version: 1.5.2
-description: "Bounded pre-delivery verification with optional cooperative outcome review and async guards."
+version: 1.6.0
+description: "Jev-controlled optional verification, medium-to-max reasoning, and durable provider failure circuits."
 author: Response Critic contributors
 kind: standalone

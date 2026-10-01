@@ -5,7 +5,7 @@ A standalone Hermes plugin for bounded, pre-delivery verification. Install under
 It does not replace Hermes source, agent models, tool permissions, or gateway send methods.
 The original agent always runs with its normal toolset before outcome review.
 
-## Cooperative outcome review (1.5.2)
+## Cooperative outcome review (1.6.0)
 
 Settings live under `plugins.entries.response-critic.settings`:
 
@@ -27,9 +27,16 @@ The arguments are `user_message`, `assistant_response`, `evidence`, `internal`, 
   standalone Kimi/OpenRouter critic keeps its own verification behavior; Jev never
   changes delivery, requests a continuation or starts a new agent in shadow mode.
 - **Active:** application requires critic mode, local outcome-review mode, and the
-  tool's returned mode all to be `active`, plus confidence of at least **0.97**.
-  `accept` can skip full verification. `handoff` additionally requires actual
-  session-scoped pending runtime work, never a promise alone.
+  tool's returned mode all to be `active`. Jev independently supplies the review
+  disposition/confidence and judge policy: `judge_required` (strict boolean),
+  `judge_confidence` (finite number in 0..1, never a boolean), and
+  `verifier_effort` (`medium`, `high`, or `max`; no `low`/`xhigh`).
+  A trusted required choice (`judge_confidence >= 0.97`) runs the generative judge
+  at the requested effort even if scenario/disposition confidence is weaker.
+  A trusted skip choice (`judge_required: false`, policy **and** relevant review
+  confidence >= **0.97**) may skip only `accept`, `acknowledge`, or `handoff`.
+  `handoff` additionally requires actual session-scoped pending runtime work,
+  never a promise alone. Normal acceptance alone never implies judge permission.
 - `correct` and `recover` return specific feedback through the existing `pre_verify`
   continuation gate to the **original agent with full tools**. They share the existing
   iteration cap. Recovery guidance requires inspecting failure, authorization, and
@@ -41,7 +48,11 @@ The arguments are `user_message`, `assistant_response`, `evidence`, `internal`, 
   Failed, staged, historical, or unknown-format memory results do not authorize it.
   Missing evidence falls back to full verification, not a success acknowledgment.
 - Uncertain, low-confidence, missing, malformed, or failed outcome results fall back
-  to full maximum-effort verification in active cooperative mode. `refusal` never
+  to full maximum-effort verification in active cooperative mode, unless there is
+  an independently trusted required/effort choice. Missing/invalid policy is
+  normalized to `judge_required: true`, `judge_confidence: 0`, effort `max`;
+  independent, valid `correct`/`recover` guidance still uses the existing gate.
+  Short/trivial/legacy background triage cannot bypass active policy. `refusal` never
   triggers recovery or alternate-provider bypass. Verifier availability failures
   retain the original fail-open behavior.
 - `critic_mode: shadow` and `off` perform no inline judge calls, continuations,
@@ -56,15 +67,22 @@ change a sticky provider, or guarantee prevention of tool side effects. Other pl
 ## Judge fallback chain
 
 1. Kimi K3 on the Kimi Coding chat-completions wire.
-2. OpenRouter: `meta/muse-spark-1.3-contributor`, `reasoning.effort: max`.
+2. OpenRouter: `meta/muse-spark-1.3-contributor`, `reasoning.effort` set to the
+   requested canonical `medium`, `high`, or `max`.
 
 Quota, authentication, network errors, and invalid verdicts advance directly from
 Kimi to OpenRouter. A valid `passed: false` challenge is not bypassed. The OpenRouter
 request requires parameter support and reserves **16,384 output tokens**; unsupported
-maximum reasoning is not retried at lower effort. Non-maximum `fallback_effort`
-settings are normalized to `max`. No subscription login helper or credential store
-is used. Standalone Kimi effort selection remains controlled by `min_effort` and
-`max_effort`; active cooperative abstentions use `max`.
+reasoning is unavailable, not retried at lower effort or with reasoning disabled.
+Kimi's supported wire values are `high` and `max`: canonical `medium` rounds **up**
+to `high`, `high` remains `high`, and `max` remains `max`. All adapters use the
+same bounded helper; legacy `minimal`/`low` clamp to `medium`, `xhigh` to `max`,
+and unknown values to `max`. Standalone selection uses `min_effort` (default
+`medium`) and `max_effort` (default `max`); active cooperative abstentions use
+`max`. Deprecated `fallback_effort` no longer overrides a valid requested effort.
+No subscription login helper or credential store is used. A structured provider
+safety refusal/content filter blocks fallback without counting as a technical
+outage or resetting failures (it is not a schema verdict).
 
 The Contributor tier permits Meta to use prompts and outputs for model improvement.
 Review sends redacted request, draft, and evidence text to external providers; enable
@@ -76,11 +94,41 @@ parallel sessions can start their own review; there is no fixed two/five-chat ca
 A still-running worker blocks duplicate inference only in its own session/stage,
 not another chat or profile. Worker keys are released on completion/start failure.
 Missing session IDs receive unique buckets instead of sharing a default slot.
-Quota/auth HTTP 401/403/429 responses cool down that judge for
-`provider_cooldown_seconds` (default 300); reasoning remains `max` on OpenRouter.
 The installed profile permits one correction instead of five. This does not bound
 the original agent's tool/model work or the time spent producing a corrected draft.
 Main-agent results cover subagents; duplicate child critic passes are skipped.
+
+### Profile-scoped persistent failure circuit
+
+`ctx.state` stores the bounded map `provider_failure_cache_v1`. Cache identity is
+SHA-256 of provider + model + base URL; the stored map contains only opaque keys,
+failure/open counts, wall-clock cooldown/probe deadlines, status codes, and bounded
+error-category labels. It stores no API keys, raw URLs/model metadata, response
+bodies, drafts, tool evidence, or exception text. The cache survives re-registration,
+periodic module/plugin reload, and process restart in the same profile.
+
+```yaml
+provider_failure_threshold: 2       # consecutive technical errors; integer 1..100
+provider_cooldown_seconds: 300      # base cooldown, seconds; 1..3600
+provider_max_cooldown_seconds: 3600 # exponential cap, seconds; 1..3600, >= base
+review_budget_seconds: 300         # shared caller deadline; 1..300
+```
+
+HTTP **401/403/429** opens immediately. Repeated network, 5xx, and invalid-schema
+responses open at the threshold. Each failed post-expiry probe doubles the
+cooldown up to its configured cap. Valid positive `Retry-After` seconds or HTTP
+dates extend it only within that cap. An expired circuit leases one bounded probe;
+healthy providers retain full independent-session concurrency. Only a valid schema
+verdict resets failure/backoff counts, including `passed: false`. Missing keys,
+cached skips, and malformed replies do not reset them. Transport and fallback
+chain accounting cannot double-count one request. Late abandoned workers cannot
+reset/increment the circuit after the shared inference deadline.
+
+Updates combine PluginState's atomic write with a separate advisory lock, so the
+read/modify/write remains atomic across parallel sessions and reloaded modules.
+Only 128 provider identities are retained. If the host lacks/unavailability blocks
+`ctx.state`, a logged in-memory fallback still suppresses repeated failures, but
+does **not** promise reload durability. Cache failures never log raw error bodies.
 
 ## Hooks and compatibility
 
@@ -127,8 +175,12 @@ PYTHONPATH=/path/to/hermes-agent /path/to/test-venv/bin/python \
 Tests are offline: judge responses, memory results, and runtime pending status are
 explicit mocks, not live provider or persistence results. Real PluginManager tests
 load this plugin and a test-only cooperative tool into temporary profile scopes.
-Coverage includes standalone fallback behavior, mode intersection, malformed envelopes,
-maximum-effort abstention, bounded recovery, verified/unverified acknowledgments,
+Coverage includes standalone fallback behavior, mode intersection, strict judge-policy
+validation, required-policy independence from scenario confidence, canonical effort
+payloads on both providers, maximum-effort abstention, bounded recovery,
+verified/unverified acknowledgments, durable cache/reload/profile scope, threshold
+and immediate circuits, expiry probes, bounded backoff/Retry-After, valid negative
+reset, parallel cache atomicity, late-result isolation, structured refusal handling,
 redaction, current-history provenance, hook ordering, genuine human follow-ups, and
 the exact refactor/tests-running handoff that previously triggered a false challenge.
 

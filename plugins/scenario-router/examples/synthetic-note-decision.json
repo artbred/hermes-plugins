@@ -34,6 +34,25 @@
         "not_confirmed": 0,
         "not_applicable": 0
       }
+    },
+    "judge_required": {
+      "type": "choice",
+      "choice": "skip",
+      "confidence": 1,
+      "probabilities": {
+        "required": 0,
+        "skip": 1
+      }
+    },
+    "judge_effort": {
+      "type": "choice",
+      "choice": "medium",
+      "confidence": 1,
+      "probabilities": {
+        "medium": 1,
+        "high": 0,
+        "max": 0
+      }
     }
   }
 }

@@ -8,7 +8,7 @@ r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
 
 
 def response(outcome,verdict='ready',memory='not_applicable',vconfidence=.45,mconfidence=.52):
-    labels={'outcome':(outcome,.99),'verdict':(verdict,vconfidence),'memory_evidence':(memory,mconfidence)}
+    labels={'outcome':(outcome,.99),'verdict':(verdict,vconfidence),'memory_evidence':(memory,mconfidence), 'judge_required':('required',.99),'judge_effort':('max',.99)}
     return {'answers':{name:{'type':'choice','choice':label,'confidence':confidence,'probabilities':{k:int(k==label) for k in r.QUESTIONS[name]['criteria']}} for name,(label,confidence) in labels.items()}}
 
 

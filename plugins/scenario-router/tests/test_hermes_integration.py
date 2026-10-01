@@ -7,7 +7,8 @@ import pytest
 
 
 @pytest.mark.parametrize('mode', ['shadow', 'active', 'off'])
-def test_real_plugin_manager_discovery_and_dispatch(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize('judge_required', ['required', 'skip'])
+def test_real_plugin_manager_discovery_and_dispatch(tmp_path, monkeypatch, mode, judge_required):
     from hermes_cli.plugins import PluginManager
     from tools.registry import registry
     plugin = Path(__file__).resolve().parents[1]
@@ -27,7 +28,8 @@ def test_real_plugin_manager_discovery_and_dispatch(tmp_path, monkeypatch, mode)
         def decide(state):
             calls.append(state)
             # Explicit synthetic test response; never a live Jev result.
-            labels = {'outcome': 'normal_answer', 'verdict': 'ready', 'memory_evidence': 'not_applicable'}
+            labels = {'outcome': 'normal_answer', 'verdict': 'ready', 'memory_evidence': 'not_applicable',
+                      'judge_required': judge_required, 'judge_effort': 'high'}
             # Questions imported via the plugin function's module before patching.
             return {'answers': {n: {'type': 'choice', 'choice': label, 'confidence': 1,
                                     'probabilities': {k: int(k == label) for k in q[n]['criteria']}}
@@ -50,7 +52,10 @@ def test_real_plugin_manager_discovery_and_dispatch(tmp_path, monkeypatch, mode)
         assert result['mode'] == mode
         assert result['ok'] is (mode != 'off')
         assert result['review']['disposition'] == ('uncertain' if mode == 'off' else 'accept')
-        assert result['review']['applied'] is False and result['review']['verifier_effort'] == 'max'
+        assert result['review']['applied'] is False
+        assert result['review']['judge_required'] is (mode == 'off' or judge_required == 'required')
+        assert result['review']['judge_confidence'] == (0 if mode == 'off' else 1)
+        assert result['review']['verifier_effort'] == ('max' if mode == 'off' else 'high')
         record = reviewer.ctx.state.get('last_decision')
         assert record['source'] == 'tool'
         serialized = json.dumps(record) + json.dumps(reviewer.ctx.state.get('review_history'))
@@ -58,6 +63,48 @@ def test_real_plugin_manager_discovery_and_dispatch(tmp_path, monkeypatch, mode)
     finally:
         manager.unload()
     assert registry.get_entry('scenario_review_outcome', scope=str(home)) is None
+
+
+def test_real_profile_failure_cache_persists_reload_and_isolates_profiles(tmp_path, monkeypatch):
+    from hermes_cli.plugins import PluginManager
+    plugin = Path(__file__).resolve().parents[1]
+    first_cache = None
+    for profile in ['one', 'two', 'one']:
+        home = tmp_path / profile
+        if not home.exists():
+            home.mkdir()
+            shutil.copytree(plugin, home / 'plugins' / 'scenario-router',
+                            ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache'))
+            (home / 'config.yaml').write_text('plugins:\n  enabled: [scenario-router]\n  entries:\n    scenario-router:\n      settings:\n        mode: active\n')
+        monkeypatch.setenv('HERMES_HOME', str(home))
+        manager = PluginManager(scope_key=str(home))
+        try:
+            manager.discover_and_load()
+            assert not manager._plugins['scenario-router'].error
+            reviewer = next(cb.__self__ for cb in manager._hooks['pre_llm_call']
+                            if getattr(getattr(cb, '__self__', None), 'failure_ref', None))
+            calls = []
+            def failed(state):
+                calls.append(state)
+                return {'error': 'http_error', 'body': 'PRIVATE_PROVIDER_BODY'}
+            monkeypatch.setattr(reviewer.client, 'decide', failed)
+            result = json.loads(reviewer.ctx.dispatch_tool('scenario_review_outcome', {
+                'user_message': 'PRIVATE_INPUT', 'assistant_response': 'PRIVATE_DRAFT',
+                'evidence': 'PRIVATE_TOOL_DATA', 'internal': False, 'pending_background': False}))
+            assert result['review']['judge_required'] is True
+            assert result['review']['judge_confidence'] == 0
+            assert result['review']['verifier_effort'] == 'max'
+            cache = reviewer.ctx.state.get('jev_failure_cache')
+            if profile == 'one' and first_cache is not None:
+                assert not calls and cache == first_cache
+            else:
+                assert len(calls) == 1 and cache['kind'] == 'http_error'
+            if profile == 'one':
+                first_cache = cache
+            persisted = json.dumps(cache) + json.dumps(reviewer.ctx.state.get('last_decision'))
+            assert 'PRIVATE_' not in persisted
+        finally:
+            manager.unload()
 
 
 def test_disabled_plugin_not_registered(tmp_path, monkeypatch):

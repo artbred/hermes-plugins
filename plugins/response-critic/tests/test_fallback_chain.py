@@ -31,44 +31,44 @@ def chain(c, monkeypatch, kimi=None, router=None):
 
 def test_kimi_success_stops_chain(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=PASS, router=FAIL)
-    assert critic._judge('draft', 'low', 'system') == (PASS, 'kimi')
+    assert critic._judge('draft', 'medium', 'system') == (PASS, 'kimi')
     assert seen == ['kimi']
 
 
 def test_valid_kimi_challenge_is_not_bypassed(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=FAIL, router=PASS)
-    assert critic._judge('draft', 'low', 'system') == (FAIL, 'kimi')
+    assert critic._judge('draft', 'medium', 'system') == (FAIL, 'kimi')
     assert seen == ['kimi']
 
 
 def test_kimi_unavailable_uses_router_directly(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=None, router=PASS)
-    assert critic._judge('draft', 'low', 'system') == (PASS, 'openrouter-fallback')
+    assert critic._judge('draft', 'medium', 'system') == (PASS, 'openrouter-fallback')
     assert seen == ['kimi', 'router']
 
 
 def test_timeout_advances_to_router(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi=httpx.ReadTimeout('test timeout'), router=PASS)
-    assert critic._judge('draft', 'low', 'system') == (PASS, 'openrouter-fallback')
+    assert critic._judge('draft', 'medium', 'system') == (PASS, 'openrouter-fallback')
     assert seen == ['kimi', 'router']
 
 
 def test_invalid_schema_advances(critic, monkeypatch):
     seen = chain(critic, monkeypatch, kimi={'passed':'false'}, router=FAIL)
-    assert critic._judge('draft', 'low', 'system') == (FAIL, 'openrouter-fallback')
+    assert critic._judge('draft', 'medium', 'system') == (FAIL, 'openrouter-fallback')
     assert seen == ['kimi', 'router']
 
 
 def test_all_unavailable_fail_open(critic, monkeypatch):
     seen = chain(critic, monkeypatch)
-    assert critic._judge('draft', 'low', 'system') == (None, 'none')
+    assert critic._judge('draft', 'medium', 'system') == (None, 'none')
     assert seen == ['kimi', 'router']
 
 
 def test_disabled_fallback_is_not_called(critic, monkeypatch):
     critic._fallback_enabled = False
     seen = chain(critic, monkeypatch, kimi=None, router=PASS)
-    assert critic._judge('draft', 'low', 'system') == (None, 'none')
+    assert critic._judge('draft', 'medium', 'system') == (None, 'none')
     assert seen == ['kimi']
 
 
@@ -84,23 +84,65 @@ def http_client(c, monkeypatch, response):
     return post
 
 
-def test_openrouter_always_uses_max_thinking_and_contributor(critic, monkeypatch):
+@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+def test_openrouter_preserves_requested_effort_and_contributor(critic, monkeypatch, effort):
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-openrouter')
     post = http_client(critic, monkeypatch, httpx.Response(200, json={'choices':[{'message':{'content':json.dumps(PASS)}}]}))
-    assert critic._judge_openrouter('draft', 'low', 'system') == PASS
+    assert critic._judge_openrouter('draft', effort, 'system') == PASS
     payload = post.call_args.kwargs['json']
     assert payload['model'] == 'meta/muse-spark-1.3-contributor'
-    assert payload['reasoning']['effort'] == 'max'
-    assert payload['max_tokens'] >= 16384
+    assert payload['reasoning']['effort'] == effort
+    assert payload['max_tokens'] == 16384
     assert payload['provider']['require_parameters'] is True
 
 
-def test_rejected_max_thinking_is_not_retried_without_reasoning(critic, monkeypatch):
+@pytest.mark.parametrize('effort,wire_effort', [('medium', 'high'), ('high', 'high'), ('max', 'max')])
+def test_kimi_preserves_supported_requested_effort(critic, monkeypatch, effort, wire_effort):
+    monkeypatch.setenv('KIMI_API_KEY', 'test-kimi')
+    post = http_client(critic, monkeypatch, httpx.Response(200, json={'choices':[{'message':{'content':json.dumps(PASS)}}]}))
+    assert critic._judge_kimi('draft', effort, 'system') == PASS
+    assert post.call_args.kwargs['json']['reasoning_effort'] == wire_effort
+
+
+@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+def test_fallback_chain_forwards_requested_effort_unchanged(critic, monkeypatch, effort):
+    primary = Mock(return_value=None)
+    fallback = Mock(return_value=PASS)
+    monkeypatch.setattr(critic, '_judge_kimi', primary)
+    monkeypatch.setattr(critic, '_judge_openrouter', fallback)
+    assert critic._judge('draft', effort, 'system') == (PASS, 'openrouter-fallback')
+    primary.assert_called_once_with('draft', effort, 'system')
+    fallback.assert_called_once_with('draft', effort, 'system')
+
+
+@pytest.mark.parametrize('effort,canonical', [
+    ('low', 'medium'), ('minimal', 'medium'), ('xhigh', 'max'),
+    ('unknown', 'max'), ('', 'max'), (None, 'max'), (False, 'max'),
+])
+@pytest.mark.parametrize('provider', ['kimi', 'openrouter'])
+def test_transport_effort_is_bounded_even_for_legacy_or_invalid_callers(critic, monkeypatch, effort, canonical, provider):
+    monkeypatch.setenv('KIMI_API_KEY', 'test-kimi')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-openrouter')
+    post = http_client(critic, monkeypatch, httpx.Response(200, json={'choices':[{'message':{'content':json.dumps(PASS)}}]}))
+    assert critic._bounded_effort(effort) == canonical
+    adapter = critic._judge_kimi if provider == 'kimi' else critic._judge_openrouter
+    assert adapter('draft', effort, 'system') == PASS
+    payload = post.call_args.kwargs['json']
+    if provider == 'kimi':
+        assert payload['reasoning_effort'] == ('max' if canonical == 'max' else 'high')
+    else:
+        assert payload['reasoning']['effort'] == canonical
+        assert payload['max_tokens'] == 16384
+        assert payload['provider']['require_parameters'] is True
+
+
+@pytest.mark.parametrize('effort', ['medium', 'high', 'max'])
+def test_rejected_thinking_is_not_retried_without_reasoning(critic, monkeypatch, effort):
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-openrouter')
     post = http_client(critic, monkeypatch, httpx.Response(400, json={'error':{'message':'test rejection'}}))
-    assert critic._judge_openrouter('draft', 'low', 'system') is None
+    assert critic._judge_openrouter('draft', effort, 'system') is None
     assert post.call_count == 1
-    assert post.call_args.kwargs['json']['reasoning']['effort'] == 'max'
+    assert post.call_args.kwargs['json']['reasoning']['effort'] == effort
 
 
 def test_http_providers_share_five_minute_budget(critic):

@@ -20,7 +20,8 @@ def pick(name, label, confidence=1):
 
 def decision(outcome='normal_answer', verdict='ready', memory='not_applicable', confidence=1):
     return {'answers': {name: pick(name, label, confidence) for name, label in
-                        [('outcome', outcome), ('verdict', verdict), ('memory_evidence', memory)]}}
+                        [('outcome', outcome), ('verdict', verdict), ('memory_evidence', memory),
+                         ('judge_required', 'required'), ('judge_effort', 'max')]}}
 
 
 def state(**kw):
@@ -31,7 +32,7 @@ def state(**kw):
 def ctx(cfg=None):
     data = {}
     obj = SimpleNamespace(get_config=lambda k, default: (cfg or {}).get(k, default),
-                          state=SimpleNamespace(set=lambda k, v: data.__setitem__(k, v)),
+                          state=SimpleNamespace(set=lambda k, v: data.__setitem__(k, v), get=lambda k, d=None: data.get(k, d)),
                           data=data, hooks={}, tools={})
     obj.register_hook = lambda name, fn: obj.hooks.__setitem__(name, fn)
     obj.register_tool = lambda **kw: obj.tools.__setitem__(kw['name'], kw)
@@ -70,7 +71,7 @@ def test_note_never_acknowledged_without_supplied_confirmation(memory, evidence)
 
 
 def test_high_threshold_for_all_memory_decisions():
-    for name in r.QUESTIONS:
+    for name in r.SCENARIO_QUESTIONS:
         payload = decision('brain_dump_added', memory='confirmed')
         payload['answers'][name]['confidence'] = .96
         result = r.review_envelope(payload, state(evidence='write/readback'), r.DEFAULTS)
@@ -309,6 +310,8 @@ def test_shadow_explicit_and_posthook_independent_calls(monkeypatch):
     reviewer.before(session_id='s', turn_id='t', user_message='request')
     reviewer.handler(state())
     reviewer.after(session_id='s', turn_id='t', assistant_response='answer')
+    reviewer.shadow_queue.join()
+    reviewer.close()
     assert len(seen) == 2
 
 
@@ -466,6 +469,9 @@ def test_bundled_english_russian_fixtures():
     assert summary['matched'] == summary['total']
     assert len(records) >= 8
     assert summary['synthetic_replay'] is True
+    assert summary['invalid_responses'] == summary['failed_requests'] == summary['mismatched'] == 0
+    assert summary['judge_required'] == 9 and summary['judge_skipped'] == 5
+    assert all(set(record['expected']) == {'scenario', 'disposition', 'judge_required', 'verifier_effort'} for record in records)
 
 
 def test_oversized_state_replay_abstains_too():
