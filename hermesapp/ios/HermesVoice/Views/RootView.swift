@@ -167,10 +167,14 @@ private struct RecordingDiscardTarget: UIViewRepresentable {
     }
 }
 
-private final class RecordingDiscardView: UIView {
+final class RecordingDiscardView: UIView {
     var discard: (() -> Void)?
+    private let acceptsTouchesAfter = ProcessInfo.processInfo.systemUptime
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // This layer is inserted as the microphone action completes. A touch that
+        // began before insertion belongs to that action, not to a new discard tap.
+        guard touches.contains(where: { $0.timestamp >= acceptsTouchesAfter }) else { return }
         // Own the touch from its start so removing this overlay cannot activate
         // a toolbar button, link, or other control underneath it.
         discard?()

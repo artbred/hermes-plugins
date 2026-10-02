@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import HermesVoice
 
 @MainActor
@@ -126,6 +127,22 @@ struct VoicePlaybackTests {
         #expect(!fileExists)
     }
 
+    @Test("The microphone-opening touch cannot dismiss a new recording, but a fresh outside tap can")
+    func openingTouchDoesNotDiscardRecording() {
+        let openingTouch = TimestampedRecordingTouch(timestamp: ProcessInfo.processInfo.systemUptime - 1)
+        let discardView = RecordingDiscardView(frame: .zero)
+        var discarded = 0
+        discardView.discard = { discarded += 1 }
+        discardView.touchesBegan([openingTouch], with: nil)
+        #expect(discarded == 0)
+
+        let freshTouch = TimestampedRecordingTouch(timestamp: ProcessInfo.processInfo.systemUptime)
+        discardView.touchesBegan([freshTouch], with: nil)
+        #expect(discarded == 1)
+        #expect(discardView.accessibilityActivate())
+        #expect(discarded == 2)
+    }
+
     @Test("The old hosted endpoint migrates without changing custom servers", arguments: [
         ("https://notes.sashakuzina.com", "https://hermes.sashakuzina.com"),
         ("https://notes.sashakuzina.com/", "https://hermes.sashakuzina.com/"),
@@ -151,4 +168,17 @@ struct VoicePlaybackTests {
         data.append(Data("data".utf8)); append(UInt32(byteCount)); data.append(Data(repeating: 0, count: byteCount))
         return data
     }
+}
+
+@MainActor
+private final class TimestampedRecordingTouch: UITouch {
+    private let eventTimestamp: TimeInterval
+
+    init(timestamp: TimeInterval) {
+        eventTimestamp = timestamp
+        super.init()
+    }
+
+    override var timestamp: TimeInterval { eventTimestamp }
+    override var phase: UITouch.Phase { .began }
 }
