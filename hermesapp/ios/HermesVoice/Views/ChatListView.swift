@@ -16,7 +16,7 @@ struct ChatListView: View {
     }
 
     private var chats: [Chat] {
-        let ordered = model.store.chats
+        let ordered = model.store.chats.filter { !$0.messages.isEmpty }
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return ordered }
         return ordered.filter { chat in

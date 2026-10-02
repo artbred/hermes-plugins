@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import HermesVoice
 
 @MainActor
@@ -17,6 +18,129 @@ struct ChatTests {
         let restored = ChatStore(directory: directory)
         #expect(restored.chat(id: chat.id) == chat)
         #expect(try Data(contentsOf: restored.audioURL(fileName: "recording.m4a")) == Data([1, 2, 3]))
+    }
+
+    @Test("A first-message title appears before admission and is published while the run is still active")
+    func earlyTitleBeforeRunCompletion() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let admission = DeferredStubResponse()
+        let finished = Mutex(false)
+        let published = Mutex(false)
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("POST", "/api/voice/title"):
+                return .json(200, #"{"choices":[{"message":{"content":"Healthy drink subscriptions"},"finish_reason":"stop"}]}"#)
+            case ("POST", "/v1/runs"): return .deferred(admission)
+            case ("GET", "/v1/runs/title-run"):
+                return finished.withLock { $0 }
+                    ? .json(200, #"{"run_id":"title-run","status":"completed","session_id":"shared","output":"Completed research"}"#)
+                    : .json(200, #"{"run_id":"title-run","status":"running","session_id":"shared"}"#)
+            case ("GET", "/api/sessions/shared/messages"):
+                return .json(200, #"{"session_id":"shared","data":[]}"#)
+            case ("PATCH", "/api/sessions/shared"):
+                published.withLock { $0 = true }
+                return .json(200, #"{"session":{"id":"shared","title":"Healthy drink subscriptions"}}"#)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        let model = AppModel(store: store, client: server.client())
+        model.sendText("Find David Beckham's healthy drink delivery subscription and product links.")
+        let chatID = try #require(model.selectedChatID)
+        let early = await eventually { store.chat(id: chatID)?.titleGenerated == true }
+        #expect(early)
+        #expect(store.chat(id: chatID)?.sessionID == nil)
+        #expect(store.chat(id: chatID)?.title == "Healthy drink subscriptions")
+        #expect(store.chat(id: chatID)?.messages.contains { $0.role == .assistant } == false)
+        admission.resolve(.json(202, #"{"run_id":"title-run","status":"started"}"#))
+        let beforeCompletion = await eventually { published.withLock { $0 } }
+        #expect(beforeCompletion)
+        #expect(store.chat(id: chatID)?.messages.first?.stage == .running)
+        finished.withLock { $0 = true }
+        try #require(await eventually { store.chat(id: chatID)?.messages.last?.text == "Completed research" })
+        #expect(store.chat(id: chatID)?.titleNeedsPublishing != true)
+        #expect(ChatStore(directory: directory).chat(id: chatID)?.title == "Healthy drink subscriptions")
+        #expect(server.requests.filter { $0.path == "/api/voice/title" }.count == 1)
+    }
+
+    @Test("Delayed title generation updates its original chat after selection changes")
+    func titleKeepsOwningChat() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let title = DeferredStubResponse()
+        let finished = Mutex(false)
+        let published = Mutex(false)
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("POST", "/api/voice/title"): return .deferred(title)
+            case ("POST", "/v1/runs"):
+                return .json(202, #"{"run_id":"delayed-title-run","status":"started"}"#)
+            case ("GET", "/v1/runs/delayed-title-run"):
+                return finished.withLock { $0 }
+                    ? .json(200, #"{"run_id":"delayed-title-run","status":"completed","session_id":"shared","output":"Finished"}"#)
+                    : .json(200, #"{"run_id":"delayed-title-run","status":"running","session_id":"shared"}"#)
+            case ("GET", "/api/sessions/shared/messages"):
+                return .json(200, #"{"session_id":"tip","data":[]}"#)
+            case ("PATCH", "/api/sessions/tip"):
+                published.withLock { $0 = true }
+                return .json(200, #"{"session":{"id":"tip","title":"Monthly expense tracking"}}"#)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        let model = AppModel(store: store, client: server.client())
+        model.sendText("Design an Excel tracker for monthly household expenses and budget categories.")
+        let originalID = try #require(model.selectedChatID)
+        try #require(await eventually { store.chat(id: originalID)?.sessionID == "shared" })
+        model.newChat()
+        let emptyID = try #require(model.selectedChatID)
+        title.resolve(.json(200, #"{"choices":[{"message":{"content":"Monthly expense tracking"},"finish_reason":"stop"}]}"#))
+        try #require(await eventually { published.withLock { $0 } })
+        #expect(store.chat(id: originalID)?.title == "Monthly expense tracking")
+        #expect(store.chat(id: originalID)?.messages.first?.stage == .running)
+        #expect(store.chat(id: originalID)?.titleNeedsPublishing != true)
+        #expect(store.chat(id: emptyID)?.title == "New chat")
+        #expect(store.chat(id: emptyID)?.messages.isEmpty == true)
+        #expect(model.selectedChatID == emptyID)
+        finished.withLock { $0 = true }
+        try #require(await eventually { store.chat(id: originalID)?.messages.last?.text == "Finished" })
+        #expect(server.requests.filter { $0.path == "/api/voice/title" }.count == 1)
+    }
+
+    @Test("A voice title can appear during classification and remains local for a brain dump")
+    func titleAfterTranscription() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let classification = DeferredStubResponse()
+        let message = ChatMessage(role: .user, input: .voice, text: "", audioFileName: "input.m4a")
+        let server = StubServer { request in
+            switch request.path {
+            case "/api/audio/transcribe":
+                return .json(200, #"{"ok":true,"transcript":"I felt restored after a quiet evening walk."}"#)
+            case "/api/voice/classify": return .deferred(classification)
+            case "/api/voice/title":
+                return .json(200, #"{"choices":[{"message":{"content":"A restorative evening walk"},"finish_reason":"stop"}]}"#)
+            case "/api/voice/retain":
+                return .json(200, "{\"success\":true,\"bank_id\":\"voice\",\"items_count\":1,\"async\":true,\"operation_id\":\"\(message.id)\"}")
+            default: return .json(404, #"{"detail":"Unexpected request"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        try Data([1, 2, 3]).write(to: store.audioURL(fileName: "input.m4a"))
+        let chat = Chat(messages: [message])
+        try store.save(chat)
+        let model = AppModel(store: store, client: server.client())
+        model.scenePhaseChanged(.active)
+        try #require(await eventually { store.chat(id: chat.id)?.titleGenerated == true })
+        #expect(store.chat(id: chat.id)?.messages.first?.stage == .classifying)
+        classification.resolve(.json(200, #"{"answers":{"intent":{"type":"choice","choice":"brain_dump","confidence":0.99,"probabilities":{"chat":0.001,"brain_dump":0.998,"unsure":0.001}}}}"#))
+        try #require(await eventually { store.chat(id: chat.id)?.messages.first?.stage == .completed })
+        #expect(store.chat(id: chat.id)?.title == "A restorative evening walk")
+        #expect(store.chat(id: chat.id)?.titleNeedsPublishing != true)
+        #expect(store.chat(id: chat.id)?.sessionID == nil)
+        #expect(server.requests.filter { $0.path == "/api/voice/title" }.count == 1)
+        #expect(server.requests.filter { $0.path == "/v1/runs" || $0.method == "PATCH" }.isEmpty)
     }
 
     @Test("Legacy imports gain notification-safe local IDs without replaying an uncertain turn under a new key")

@@ -449,6 +449,7 @@ final class AppModel {
     private func kick(_ chatID: String) {
         guard workers[chatID] == nil, let client = makeClient(),
               store.chat(id: chatID)?.hasPendingMessages == true else { return }
+        scheduleTitle(chatID)
         let workerID = UUID()
         workerIDs[chatID] = workerID
         workers[chatID] = Task { [weak self] in
@@ -517,6 +518,9 @@ final class AppModel {
                     chat.messages[index].text = transcript
                 }
             }
+            // Transcription makes the first voice message meaningful without waiting
+            // for classification, agent completion, or a spoken reply.
+            if message.input == .voice { scheduleTitle(chatID) }
             if message.input == .voice, message.files.isEmpty, message.classification == nil {
                 try updateMessage(chatID, message.id) { $0.stage = .classifying; $0.error = nil }
                 let previous = (store.chat(id: chatID)?.messages ?? [])
@@ -537,11 +541,15 @@ final class AppModel {
                 try updateMessage(chatID, message.id) { $0.stage = .savingMemory; $0.error = nil }
                 try await client.retainBrainDump(id: message.id, text: message.text, recordedAt: message.createdAt)
                 guard workerIDs[chatID] == workerID else { throw CancellationError() }
-                try updateMessage(chatID, message.id) {
-                    $0.stage = .completed
-                    $0.error = nil
-                    $0.stopRequested = nil
-                    $0.stopAcknowledged = nil
+                try updateChat(chatID) { chat in
+                    guard let index = chat.messages.firstIndex(where: { $0.id == message.id }) else { return }
+                    chat.messages[index].stage = .completed
+                    chat.messages[index].error = nil
+                    chat.messages[index].stopRequested = nil
+                    chat.messages[index].stopAcknowledged = nil
+                    if chat.sessionID == nil, chat.messages.filter({ $0.role == .user }).allSatisfy(\.isBrainDump) {
+                        chat.titleNeedsPublishing = nil
+                    }
                 }
                 scheduleTitle(chatID)
                 return
@@ -610,8 +618,10 @@ final class AppModel {
             if let sessionID = run.sessionID, store.chat(id: chatID)?.sessionID != sessionID {
                 try updateChat(chatID) {
                     if $0.sessionRootID == nil { $0.sessionRootID = $0.sessionID ?? sessionID }
+                    if $0.titleGenerated == true, $0.sessionID == nil { $0.titleNeedsPublishing = true }
                     $0.sessionID = sessionID
                 }
+                scheduleTitle(chatID)
             }
             if let request = run.approval { receive(request, runID: runID, chatID: chatID, workerID: workerID) }
             if run.isTerminal {
@@ -903,12 +913,12 @@ final class AppModel {
         guard makeClient() != nil else { return }
         for chat in store.chats {
             kick(chat.id)
+            scheduleTitle(chat.id)
             if foreground { acknowledgeReplies(chat.id) }
             for message in chat.messages where message.role == .assistant && message.needsSpeech {
                 scheduleSpeech(message, chatID: chat.id)
             }
         }
-        if let selectedChatID { scheduleTitle(selectedChatID) }
     }
 
     private func updateChat(_ id: String, _ change: (inout Chat) -> Void) throws {
@@ -934,38 +944,47 @@ final class AppModel {
     private func scheduleTitle(_ chatID: String) {
         guard titleTasks[chatID] == nil, let client = makeClient(),
               let chat = store.chat(id: chatID), chat.titleGenerated != true || chat.titleNeedsPublishing == true,
-              chat.messages.contains(where: { $0.role == .user && $0.stage == .completed })
+              let first = chat.messages.first(where: {
+                  $0.role == .user && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !$0.files.isEmpty)
+              }),
+              chat.titleGenerated != true || chat.sessionID != nil
         else { return }
         titleTasks[chatID] = Task { [weak self] in
             guard let self else { return }
             defer { titleTasks[chatID] = nil }
             do {
                 if chat.titleGenerated != true {
-                    let completed = chat.messages.filter { $0.stage == .completed }.prefix(2)
-                    let exchange = await Task.detached(priority: .userInitiated) {
-                        completed.map { RecordingContextMessage(role: $0.role.rawValue, text: $0.text.isEmpty ? $0.files.map(\.name).joined(separator: ", ") : ($0.role == .assistant ? ResponseContent(raw: $0.text).plainText : $0.text)) }
-                    }.value
-                    try Task.checkCancellation()
-                    let title = try await client.generateTitle(messages: exchange)
+                    // A single topic description can be generated in parallel with
+                    // the full agent run; assistant output is not needed for naming.
+                    let text = first.text.isEmpty ? first.files.map(\.name).joined(separator: ", ") : first.text
+                    let title = try await client.generateTitle(messages: [
+                        RecordingContextMessage(role: MessageRole.user.rawValue, text: text)
+                    ])
                     try Task.checkCancellation()
                     guard var latest = store.chat(id: chatID) else { return }
                     latest.title = title
                     latest.titleGenerated = true
-                    latest.titleNeedsPublishing = latest.sessionID == nil ? nil : true
+                    latest.titleNeedsPublishing = latest.sessionID == nil
+                        && latest.messages.filter({ $0.role == .user }).allSatisfy(\.isBrainDump) ? nil : true
                     try store.save(latest)
                 }
                 guard let latest = store.chat(id: chatID), latest.titleNeedsPublishing == true,
                       let sessionID = latest.sessionID else { return }
-                let history = try await client.messages(sessionID: sessionID)
-                let savedTitle = try await client.setSessionTitle(sessionID: history.sessionID, title: latest.title)
+                let savedTitle = try await client.setSessionTitle(sessionID: sessionID, title: latest.title)
                 try Task.checkCancellation()
                 guard var saved = store.chat(id: chatID) else { return }
                 saved.title = savedTitle
                 saved.titleNeedsPublishing = nil
                 try store.save(saved)
+                if selectedChatID == chatID,
+                   connectionMessage?.hasPrefix("Could not generate the chat title:") == true
+                    || connectionMessage?.hasPrefix("Could not publish the chat title:") == true {
+                    connectionMessage = nil
+                }
             } catch {
                 if !Task.isCancelled, selectedChatID == chatID {
-                    connectionMessage = "Could not generate the chat title: \(error.localizedDescription)"
+                    let action = store.chat(id: chatID)?.titleGenerated == true ? "publish" : "generate"
+                    connectionMessage = "Could not \(action) the chat title: \(error.localizedDescription)"
                 }
             }
         }
