@@ -36,6 +36,47 @@ struct ChatIsolationTests {
         #expect(ChatStore(directory: directory).chat(id: chat.id) == saved)
     }
 
+    @Test("Refresh repairs cached verification duplicates while preserving final reply and audio", arguments: [false, true])
+    func cachedVerificationDrafts(legacyRow: Bool) async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = StubServer { request in
+            switch request.path {
+            case "/api/sessions":
+                return .json(200, #"{"data":[{"id":"shared","title":"Repositories"}],"has_more":false}"#)
+            case "/api/sessions/shared/messages":
+                return .json(200, #"{"session_id":"shared","data":[{"id":1,"role":"user","content":"Prepare the repositories"},{"id":2,"role":"assistant","content":"Ready for automation.","finish_reason":"verify_hook_continue"},{"id":3,"role":"assistant","content":"Both repositories are ready for automation.","finish_reason":"stop"},{"id":4,"role":"user","content":"Repeat that"},{"id":5,"role":"assistant","content":"Both repositories are ready for automation.","finish_reason":"stop"}]}"#)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let user = ChatMessage(role: .user, input: .voice, text: "Prepare the repositories", stage: .completed,
+                               runID: "one", remoteMessageID: "1", audioFileName: "input.m4a")
+        let draft = ChatMessage(id: "remote-shared-2", role: .assistant, text: "Ready for automation.", stage: .completed,
+                                remoteMessageID: legacyRow ? nil : "2")
+        let final = ChatMessage(id: "\(user.id)-reply-0", role: .assistant, input: .voice,
+                                text: "Both repositories are ready for automation.", stage: .completed,
+                                runID: "one", audioFileName: "reply.mp3", replyTo: user.id)
+        let next = ChatMessage(id: "remote-shared-4", role: .user, text: "Repeat that", stage: .completed, remoteMessageID: "4")
+        let repeated = ChatMessage(id: "remote-shared-5", role: .assistant, text: final.text, stage: .completed, remoteMessageID: "5")
+        let store = ChatStore(directory: directory)
+        try Data([1, 2, 3]).write(to: store.audioURL(fileName: "input.m4a"))
+        try Data([4, 5, 6]).write(to: store.audioURL(fileName: "reply.mp3"))
+        let chat = Chat(sessionID: "shared", messages: [user, draft, final, next, repeated], titleGenerated: true)
+        try store.save(chat)
+        let model = AppModel(store: store, client: server.client())
+        await model.refreshChats()
+        await model.refreshChats()
+        let saved = try #require(store.chat(id: chat.id))
+        #expect(saved.messages.map(\.id) == [user.id, final.id, next.id, repeated.id])
+        #expect(saved.messages.filter { $0.role == .assistant }.map(\.text) == [final.text, repeated.text])
+        #expect(saved.messages[1].remoteMessageID == "3")
+        #expect(saved.messages[1].replyTo == user.id)
+        #expect(saved.messages[1].audioFileName == "reply.mp3")
+        #expect(try Data(contentsOf: store.audioURL(fileName: "input.m4a")) == Data([1, 2, 3]))
+        #expect(try Data(contentsOf: store.audioURL(fileName: "reply.mp3")) == Data([4, 5, 6]))
+        #expect(ChatStore(directory: directory).chat(id: chat.id) == saved)
+    }
+
     @Test("An in-flight history read cannot overwrite a new local turn")
     func sharedRefreshRechecksTranscript() async throws {
         let directory = makeTemporaryDirectory()

@@ -82,8 +82,19 @@ struct RemoteMessage: Decodable, Sendable {
     var text: String
     var createdAt: Date?
     var sessionID: String?
+    var finishReason: String?
 
-    enum CodingKeys: String, CodingKey { case id, role, content, timestamp, sessionID = "session_id" }
+    var isVerificationDraft: Bool {
+        guard role == "assistant" else { return false }
+        switch finishReason {
+        case "verify_hook_continue", "verification_required": return true
+        default: return false
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, role, content, timestamp, sessionID = "session_id", finishReason = "finish_reason"
+    }
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -94,6 +105,7 @@ struct RemoteMessage: Decodable, Sendable {
         }
         role = try values.decode(String.self, forKey: .role)
         sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID)
+        finishReason = try values.decodeIfPresent(String.self, forKey: .finishReason)
         if let string = try? values.decode(String.self, forKey: .content) {
             text = string
         } else {
@@ -110,6 +122,7 @@ struct RemoteHistory: Sendable {
     var sessionID: String
     var messages: [RemoteMessage]
     var sessionIDs: Set<String>
+    var supersededMessageIDs: Set<String>
 }
 
 private struct NativeDate: Decodable {
@@ -554,6 +567,7 @@ struct APIClient: Sendable {
         var offset = 0
         var resolvedID = sessionID
         var sessionIDs: Set<String> = [sessionID]
+        var superseded = Set<String>()
         while true {
             let page: Page = try await get(["api", "sessions", sessionID, "messages"], query: [
                 URLQueryItem(name: "limit", value: "500"), URLQueryItem(name: "offset", value: String(offset)),
@@ -565,15 +579,20 @@ struct APIClient: Sendable {
                 resolvedID = tip
                 result.removeAll(keepingCapacity: true)
                 seen.removeAll(keepingCapacity: true)
+                superseded.removeAll(keepingCapacity: true)
                 offset = 0
                 sessionIDs.insert(tip)
                 continue
             }
             sessionIDs.formUnion(page.data.compactMap(\.sessionID))
-            for message in page.data where ["user", "assistant"].contains(message.role)
+            superseded.formUnion(page.data.filter(\.isVerificationDraft).map(\.id))
+            for message in page.data where !message.isVerificationDraft && ["user", "assistant"].contains(message.role)
                 && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && seen.insert(message.id).inserted { result.append(message) }
-            if page.data.count < 500 { return RemoteHistory(sessionID: resolvedID, messages: result, sessionIDs: sessionIDs) }
+            if page.data.count < 500 {
+                return RemoteHistory(sessionID: resolvedID, messages: result, sessionIDs: sessionIDs,
+                                     supersededMessageIDs: superseded)
+            }
             offset += page.data.count
         }
     }

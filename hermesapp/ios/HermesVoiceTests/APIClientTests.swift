@@ -113,6 +113,44 @@ struct APIClientTests {
         #expect(messages.map(\.createdAt) == [Date(timeIntervalSince1970: 1700000001), Date(timeIntervalSince1970: 1700000002)])
     }
 
+    @Test("Verification candidates are superseded, not delivered alongside the accepted answer")
+    func supersededVerificationDrafts() async throws {
+        let server = StubServer { _ in .json(200, """
+            {"session_id":"shared","data":[
+              {"id":1,"role":"user","content":"Prepare the repositories"},
+              {"id":2,"role":"assistant","content":"Preparing the repositories now.","finish_reason":"tool_calls"},
+              {"id":3,"role":"assistant","content":"Ready to automate both repositories.","finish_reason":"verify_hook_continue"},
+              {"id":4,"role":"assistant","content":"Automation is ready for both repositories.","finish_reason":"verification_required"},
+              {"id":5,"role":"assistant","content":"Both repositories are ready for automation.","finish_reason":"stop"},
+              {"id":6,"role":"user","content":"Repeat that"},
+              {"id":7,"role":"assistant","content":"Both repositories are ready for automation.","finish_reason":"stop"}
+            ]}
+            """) }
+        let history = try await server.client().messages(sessionID: "shared")
+        #expect(history.messages.map(\.id) == ["1", "2", "5", "6", "7"])
+        #expect(history.messages.map(\.text) == [
+            "Prepare the repositories", "Preparing the repositories now.",
+            "Both repositories are ready for automation.", "Repeat that",
+            "Both repositories are ready for automation."
+        ])
+    }
+
+    @Test("A full page of verification drafts cannot hide the accepted reply on the next page")
+    func verificationDraftPagination() async throws {
+        let server = StubServer { request in
+            let query = URLComponents(url: request.request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if query.contains(URLQueryItem(name: "offset", value: "0")) {
+                let drafts = (1...500).map { ["id": $0, "role": "assistant", "content": "Provisional \($0)", "finish_reason": "verification_required"] as [String: Any] }
+                let data = try! JSONSerialization.data(withJSONObject: ["session_id": "shared", "data": drafts])
+                return .json(200, String(decoding: data, as: UTF8.self))
+            }
+            return .json(200, #"{"session_id":"shared","data":[{"id":501,"role":"assistant","content":"Accepted final answer","finish_reason":"stop"}]}"#)
+        }
+        let history = try await server.client().messages(sessionID: "shared")
+        #expect(history.messages.map(\.text) == ["Accepted final answer"])
+        #expect(history.supersededMessageIDs == Set((1...500).map(String.init)))
+    }
+
     @Test("Shared history includes desktop and CLI sessions without importing messaging platforms")
     func sessionPagination() async throws {
         let server = StubServer { request in

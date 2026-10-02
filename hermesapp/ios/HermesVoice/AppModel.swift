@@ -786,7 +786,7 @@ final class AppModel {
                                          titleGenerated: session.title == nil ? nil : true)
                 chat.sessionRootID = session.lineageRootID ?? chat.sessionRootID ?? chat.sessionID ?? session.id
                 chat.sessionID = history.sessionID
-                chat.mergeHistory(history.messages, sessionID: session.id)
+                chat.mergeHistory(history.messages, sessionID: session.id, supersededMessageIDs: history.supersededMessageIDs)
                 guard !chat.messages.isEmpty else { continue }
                 if let title = session.title, !title.isEmpty,
                    chat.titleNeedsPublishing != true, chat.titleGenerated == true {

@@ -70,7 +70,20 @@ struct Chat: Identifiable, Codable, Equatable, Sendable {
 
     /// Merge server-owned turns while retaining local recordings, retries and diary entries.
     /// Content matching binds legacy/local completed turns once; subsequent reads use row IDs.
-    mutating func mergeHistory(_ remote: [RemoteMessage], sessionID: String) {
+    mutating func mergeHistory(_ remote: [RemoteMessage], sessionID: String, supersededMessageIDs: Set<String> = []) {
+        // Only remove identified server drafts. Similar delivered text, local run
+        // replies, audio metadata and independent turns must not be deduplicated.
+        if !supersededMessageIDs.isEmpty {
+            let prefixes = ["remote-\(sessionID)-", "remote-\(id)-", self.sessionID.map { "remote-\($0)-" }]
+                .compactMap { $0 }
+            messages.removeAll { message in
+                guard message.role == .assistant else { return false }
+                if let rowID = message.remoteMessageID { return supersededMessageIDs.contains(rowID) }
+                return prefixes.contains { prefix in
+                    message.id.hasPrefix(prefix) && supersededMessageIDs.contains(String(message.id.dropFirst(prefix.count)))
+                }
+            }
+        }
         var merged: [ChatMessage] = []
         var cursor = 0
         for row in remote {
