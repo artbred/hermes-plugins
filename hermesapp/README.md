@@ -59,6 +59,8 @@ hermes-shared sessions list
 
 The launcher requires the existing SSH alias `kuzin`. It runs native Hermes with `HERMES_HOME=/root/.hermes` and `--profile default`, quotes arguments for the remote shell, and allocates a terminal only for interactive stdin. Tools and working directories are on the VPS, not the Mac. Ordinary Mac-local `hermes` remains available but uses a separate store; it is not replicated. Do not override the shared launcher's profile if you want the same sessions as desktop and phone.
 
+On this Mac, interactive zsh maps `hermes` to the shared launcher with `alias hermes='hermes-shared'` in `~/.zshrc`. New shells load it automatically; run `source ~/.zshrc` in an existing shell. The unaliased Mac-local executable remains available explicitly as `~/.local/bin/hermes`.
+
 Only server-owned conversation history and titles are shared. Recordings, downloaded speech, unsent drafts, attachments' local previews, and silent diary-only chat entries remain device-local; their saved memory still lives in Hindsight. Removing a chat on the phone hides its whole native compression lineage on that phone; it does not delete the server conversation or other clients' copies.
 
 
