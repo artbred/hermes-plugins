@@ -34,17 +34,33 @@ struct TranscriptFollowingTests {
         #expect(atEnd)
     }
 
-    @Test("A completed short-chat bounce rearms following without treating blank space as history",
+    @Test("Repeated top-edge gestures never reposition a fitting conversation",
           arguments: [CGFloat(300), 560, 600])
-    func shortTranscript(contentHeight: CGFloat) {
+    func fittingTranscriptStaysPut(contentHeight: CGFloat) {
         var following = TranscriptFollowing()
         let geometry = TranscriptGeometry(
-            contentHeight: contentHeight, visibleRect: CGRect(x: 0, y: -400, width: 390, height: 600)
+            contentHeight: contentHeight, visibleRect: CGRect(x: 0, y: 0, width: 390, height: 600)
         )
-        let firstIdle = following.phaseChanged(to: .idle, at: geometry, isPositionedByUser: true)
-        let repeatedIdle = following.phaseChanged(to: .idle, at: geometry, isPositionedByUser: true)
-        #expect(firstIdle)
-        #expect(!repeatedIdle)
+        for _ in 0..<2 {
+            let interacting = following.phaseChanged(to: .interacting, at: geometry, isPositionedByUser: true)
+            let idle = following.phaseChanged(to: .idle, at: geometry, isPositionedByUser: true)
+            #expect(!interacting)
+            #expect(!idle)
+            following.positionChanged(isPositionedByUser: false)
+        }
+    }
+
+    @Test("Repeated top-edge gestures cannot jump a long history to its newest reply")
+    func topOfHistoryStaysPut() {
+        var following = TranscriptFollowing()
+        for y in [CGFloat(-80), 0, -40, 0] {
+            let geometry = TranscriptGeometry(
+                contentHeight: 3_000, visibleRect: CGRect(x: 0, y: y, width: 390, height: 600)
+            )
+            let anchors = following.phaseChanged(to: .idle, at: geometry, isPositionedByUser: true)
+            #expect(!anchors)
+            following.positionChanged(isPositionedByUser: false)
+        }
     }
 
     @Test("Following resumes at the actual visible end, not within an arbitrary near-bottom distance",

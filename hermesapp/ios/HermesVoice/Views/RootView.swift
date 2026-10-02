@@ -182,6 +182,19 @@ private final class RecordingDiscardView: UIView {
     }
 }
 
+private struct ChatScrollAppearance: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let scroll = content.scrollBounceBehavior(.basedOnSize)
+        if #available(iOS 26.0, *) {
+            // The system scroll-edge backdrop is separate from the hidden navigation-bar background.
+            scroll.scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            scroll
+        }
+    }
+}
+
 private struct ChatScreen: View {
     @Bindable var model: AppModel
     let reviewApproval: (RunApproval) -> Void
@@ -284,6 +297,7 @@ private struct ChatScreen: View {
                 .padding(.vertical, 32)
             }
             .scrollDismissesKeyboard(.interactively)
+            .modifier(ChatScrollAppearance())
         }
         .accessibilityIdentifier("emptyChat")
     }
@@ -329,6 +343,7 @@ private struct ChatTranscript: View {
             // A semantic edge stays anchored as replies measure and stream; geometry callbacks must not drive jumps.
             .scrollPosition($scrollPosition)
             .scrollDismissesKeyboard(.interactively)
+            .modifier(ChatScrollAppearance())
             .onChange(of: scrollPosition.isPositionedByUser) { _, new in
                 following.positionChanged(isPositionedByUser: new)
             }
@@ -497,7 +512,7 @@ struct TranscriptFollowing {
     ) -> Bool {
         positionChanged(isPositionedByUser: isPositionedByUser)
         guard new == .idle, isPositionedByUser,
-              !geometry.isScrollable || geometry.isEndVisible,
+              geometry.isScrollable, geometry.isEndVisible,
               !isAwaitingBottomPosition else {
             return false
         }
