@@ -1,0 +1,14 @@
+[Unit]
+Description=Private Traefik ingress for paid Hermes mobile speech
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Socket]
+ListenStream=172.23.0.1:9124
+NoDelay=true
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8
+IPAddressAllow=172.23.0.6/32
+
+[Install]
+WantedBy=sockets.target

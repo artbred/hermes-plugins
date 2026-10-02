@@ -14,6 +14,7 @@
 		1849BBAE9D3579BDE58F687A /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = FA1E7ED71980BB9F110B8E80 /* SwiftSoup */; };
 		18BE3524FC41CB9A4FB4C0D3 /* ChatIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 989FC999ACD874685C042935 /* ChatIsolationTests.swift */; };
 		196A79E48A6115AC7E63003C /* RecordingRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684DF26D02A0CBAE337AD31F /* RecordingRoutingTests.swift */; };
+		1B986C97399BEADD36F02632 /* SpeechVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809B89F99662C3629871B464 /* SpeechVoice.swift */; };
 		2771CDBA6105500196D3274F /* ResponseWebDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4632430664EDC8929B5EDEA8 /* ResponseWebDocument.swift */; };
 		296133FB77A13AE588305D9B /* ResponseWebPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21DE2EAEABA0F0F820397700 /* ResponseWebPolicy.swift */; };
 		2A589753134C96EC8D979EC5 /* ResponseWebScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C130262EF52B4FEB052432F2 /* ResponseWebScripts.swift */; };
@@ -34,6 +35,7 @@
 		77496BE4BB0BC82FC6BCD86C /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BF53B0B6C76D488A586CBF1 /* AppModel.swift */; };
 		786B4845D8A76FE9097433A9 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C07B60615BCC1F4C4B8207D /* AppSettings.swift */; };
 		885DAC95FC345D49DA7E0E18 /* ResponseLinkPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5E39F33FFFA3A1B32FD1AD /* ResponseLinkPresenter.swift */; };
+		8E529FB099C1415A71CEC996 /* AppSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B88F23CBFB915174691E8E /* AppSettingsTests.swift */; };
 		9197FE4CE896DDF09B6EE1B5 /* StopRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA26BA0E3A8CCE300A72C235 /* StopRunTests.swift */; };
 		94D4D9BA577D8E7E1D739522 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 75CDC62E2D5DD3122F71B981 /* Markdown */; };
 		9639AD5D29DC5586FA9CFF13 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8868FFAEF65E148F05F184F8 /* ComposerView.swift */; };
@@ -88,8 +90,10 @@
 		6AC518A21EF63E00ACBAD9DE /* VoiceMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceMessageView.swift; sourceTree = "<group>"; };
 		6B59C1064135F936DEF90676 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
 		76D461D25CE61518A627C832 /* HermesVoice.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HermesVoice.entitlements; sourceTree = "<group>"; };
+		78B88F23CBFB915174691E8E /* AppSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsTests.swift; sourceTree = "<group>"; };
 		79377E4B3B75BF7D5083AEF7 /* HermesVoiceTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HermesVoiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C07B60615BCC1F4C4B8207D /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		809B89F99662C3629871B464 /* SpeechVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechVoice.swift; sourceTree = "<group>"; };
 		854A144143858222E8AB9E83 /* ChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTests.swift; sourceTree = "<group>"; };
 		8868FFAEF65E148F05F184F8 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		8F28EC8D027E67DA45B437DA /* Recorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recorder.swift; sourceTree = "<group>"; };
@@ -166,6 +170,7 @@
 			isa = PBXGroup;
 			children = (
 				958FC77E4F62180ADAF5BCB7 /* APIClientTests.swift */,
+				78B88F23CBFB915174691E8E /* AppSettingsTests.swift */,
 				28A530613C3130AAE8F50488 /* AttachmentTests.swift */,
 				989FC999ACD874685C042935 /* ChatIsolationTests.swift */,
 				854A144143858222E8AB9E83 /* ChatTests.swift */,
@@ -256,6 +261,7 @@
 			children = (
 				0394F5EA34F804478EF619C3 /* Chat.swift */,
 				1544A200E4556E426C23F0F3 /* ChatAttachment.swift */,
+				809B89F99662C3629871B464 /* SpeechVoice.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -400,6 +406,7 @@
 				4883CCE3A3C08F60AAC56B14 /* RootView.swift in Sources */,
 				C26B3253A7147C33661F6FDF /* SendMessageIntent.swift in Sources */,
 				C98B8C1A809EFE9B7FE1B52D /* SettingsView.swift in Sources */,
+				1B986C97399BEADD36F02632 /* SpeechVoice.swift in Sources */,
 				15EE490399EE18B792F7B7D5 /* StartVoiceChatIntent.swift in Sources */,
 				DB0FF4727FF08ED21DD18B7D /* VoiceMessageView.swift in Sources */,
 			);
@@ -410,6 +417,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F5E58E27E07D8CB15C2A8C5E /* APIClientTests.swift in Sources */,
+				8E529FB099C1415A71CEC996 /* AppSettingsTests.swift in Sources */,
 				EB32AA580DB1FFDB4D5EF6B4 /* AttachmentTests.swift in Sources */,
 				18BE3524FC41CB9A4FB4C0D3 /* ChatIsolationTests.swift in Sources */,
 				3EEC56C13BF8601E2438B93A /* ChatTests.swift in Sources */,
@@ -528,7 +536,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -601,7 +609,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_NS_ASSERTIONS = NO;

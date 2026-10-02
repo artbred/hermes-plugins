@@ -1,0 +1,15 @@
+http:
+  routers:
+    hermes-paid-speech:
+      rule: Host(`hermes.sashakuzina.com`) && Method(`POST`) && Path(`/api/audio/speak`)
+      priority: 310
+      entryPoints:
+        - websecure
+      service: hermes-paid-speech
+      tls:
+        certResolver: letsencrypt
+  services:
+    hermes-paid-speech:
+      loadBalancer:
+        servers:
+          - url: http://172.23.0.1:9124

@@ -76,6 +76,8 @@ final class AppModel {
     @ObservationIgnored private var stopTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var stopTaskIDs: [String: UUID] = [:]
     @ObservationIgnored private var speechTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var observedSpeechVoice: SpeechVoice
+    @ObservationIgnored private var speechSelectionRevision = UUID()
     @ObservationIgnored private var titleTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var drafts: [String: String] = [:]
     @ObservationIgnored private var recordingChatID: String?
@@ -90,6 +92,7 @@ final class AppModel {
         clientOverride = client
         self.notifications = notifications ?? (client == nil ? .shared : nil)
         self.settings = settings
+        observedSpeechVoice = settings.speechVoice
         self.store = store
         self.recorder = recorder
         selectedChatID = store.chats.first?.id
@@ -441,6 +444,7 @@ final class AppModel {
     }
 
     func settingsChanged() {
+        refreshSpeechSelection()
         connectionMessage = nil
         resumePending()
         Task { await notifications?.refresh(client: makeClient()) }
@@ -712,15 +716,18 @@ final class AppModel {
 
     func play(_ message: ChatMessage) async {
         guard message.role == .assistant, !isRecordingInProgress else { return }
-        if playingMessageID == message.id {
+        refreshSpeechSelection()
+        guard let chat = store.chats.first(where: { $0.messages.contains(where: { $0.id == message.id }) }),
+              let current = chat.messages.first(where: { $0.id == message.id }) else { return }
+        if playingMessageID == message.id, current.speechVoice == settings.speechVoice, current.audioFileName != nil {
             do {
                 if player.isPlaying { player.pause() }
                 else { try await player.resume() }
             } catch { show(error, title: "Could not resume audio") }
             return
         }
-        guard let chat = store.chats.first(where: { $0.messages.contains(where: { $0.id == message.id }) }) else { return }
-        await synthesizeAndPlay(message, chatID: chat.id, automatic: false)
+        if playingMessageID == message.id { stopPlayback() }
+        await synthesizeAndPlay(current, chatID: chat.id, automatic: false)
     }
 
     func stopPlayback() { player.stop() }
@@ -734,35 +741,88 @@ final class AppModel {
         }
     }
 
+    private func refreshSpeechSelection() {
+        guard observedSpeechVoice != settings.speechVoice else { return }
+        observedSpeechVoice = settings.speechVoice
+        speechSelectionRevision = UUID()
+        stopPlayback()
+    }
+
     private func synthesizeAndPlay(_ message: ChatMessage, chatID: String, automatic: Bool) async {
         guard message.role == .assistant, !synthesizingMessageIDs.contains(message.id) else { return }
         synthesizingMessageIDs.insert(message.id)
         defer { synthesizingMessageIDs.remove(message.id) }
-        do {
-            var fileName = store.chat(id: chatID)?.messages.first(where: { $0.id == message.id })?.audioFileName
-            if fileName == nil || !FileManager.default.fileExists(atPath: store.audioURL(fileName: fileName!).path) {
-                guard let client = makeClient() else { throw ChatError.notConfigured }
-                let speechText = await Task.detached(priority: .userInitiated) { ResponseContent(raw: message.text).plainText }.value
-                try Task.checkCancellation()
-                guard !speechText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw APIError.cannotPrepare("This reply has no readable text to speak.")
-                }
-                let audio = try await client.speak(text: speechText)
-                try Task.checkCancellation()
-                let name = "\(message.id).\(audio.fileExtension)"
-                try audio.data.write(to: store.audioURL(fileName: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                try updateMessage(chatID, message.id) { $0.audioFileName = name; $0.needsSpeech = false; $0.error = nil }
-                fileName = name
-            }
-            if let fileName, foreground, selectedChatID == chatID, !isRecordingInProgress,
-               !automatic || player.isIdle {
-                try await player.play(url: store.audioURL(fileName: fileName), messageID: message.id)
-            }
-        } catch {
-            if Task.isCancelled { return }
+        while !Task.isCancelled {
+            refreshSpeechSelection()
+            let voice = settings.speechVoice
+            let revision = speechSelectionRevision
+            guard let current = store.chat(id: chatID)?.messages.first(where: { $0.id == message.id }) else { return }
+            if automatic, !current.needsSpeech { return }
             do {
-                try updateMessage(chatID, message.id) { $0.needsSpeech = false; $0.error = "Audio: \(error.localizedDescription)" }
-            } catch { show(error, title: "Could not save audio state") }
+                var fileName = current.speechVoice == voice ? current.audioFileName : nil
+                if fileName == nil || !FileManager.default.fileExists(atPath: store.audioURL(fileName: fileName!).path) {
+                    guard let client = makeClient() else { throw ChatError.notConfigured }
+                    let speechText = await Task.detached(priority: .userInitiated) { ResponseContent(raw: current.text).plainText }.value
+                    try Task.checkCancellation()
+                    guard revision == speechSelectionRevision, voice == settings.speechVoice else {
+                        if automatic { continue }
+                        return
+                    }
+                    guard store.chat(id: chatID)?.messages.first(where: { $0.id == message.id })?.text == current.text else { return }
+                    guard !speechText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw APIError.cannotPrepare("This reply has no readable text to speak.")
+                    }
+                    let audio = try await client.speak(text: speechText, voice: voice)
+                    try Task.checkCancellation()
+                    guard revision == speechSelectionRevision, voice == settings.speechVoice else {
+                        // Pending automatic voice replies follow the latest selection. An
+                        // on-demand Listen is discarded; the next Listen is a fresh request.
+                        if automatic { continue }
+                        return
+                    }
+                    guard store.chat(id: chatID)?.messages.first(where: { $0.id == message.id })?.text == current.text else { return }
+                    let name = "\(message.id)-\(voice.cacheKey)-\(UUID().uuidString.lowercased()).\(audio.fileExtension)"
+                    let url = store.audioURL(fileName: name)
+                    try audio.data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    do {
+                        try updateMessage(chatID, message.id) {
+                            $0.audioFileName = name
+                            $0.speechVoice = voice
+                            $0.needsSpeech = false
+                            $0.error = nil
+                        }
+                    } catch {
+                        try? FileManager.default.removeItem(at: url)
+                        throw error
+                    }
+                    // The previous file is retired only after the replacement metadata is
+                    // durable, and never if another message (including a recording) uses it.
+                    if let oldName = current.audioFileName, oldName != name,
+                       !store.chats.contains(where: { $0.messages.contains(where: { $0.audioFileName == oldName }) }) {
+                        try? FileManager.default.removeItem(at: store.audioURL(fileName: oldName))
+                    }
+                    fileName = name
+                } else if current.needsSpeech || current.error != nil {
+                    try updateMessage(chatID, message.id) { $0.needsSpeech = false; $0.error = nil }
+                }
+                guard revision == speechSelectionRevision, voice == settings.speechVoice else { return }
+                if let fileName, foreground, selectedChatID == chatID, !isRecordingInProgress,
+                   !automatic || player.isIdle {
+                    try await player.play(url: store.audioURL(fileName: fileName), messageID: message.id)
+                }
+                return
+            } catch {
+                if Task.isCancelled { return }
+                guard revision == speechSelectionRevision, voice == settings.speechVoice else {
+                    if automatic { continue }
+                    return
+                }
+                guard store.chat(id: chatID)?.messages.first(where: { $0.id == message.id })?.text == current.text else { return }
+                do {
+                    try updateMessage(chatID, message.id) { $0.needsSpeech = false; $0.error = "Audio: \(error.localizedDescription)" }
+                } catch { show(error, title: "Could not save audio state") }
+                return
+            }
         }
     }
 

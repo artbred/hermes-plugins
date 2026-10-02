@@ -214,14 +214,57 @@ struct APIClientTests {
         await consumer.value
     }
 
+    @Test("Speech requests the chosen voice and paid model and requires their exact acknowledgment")
+    func selectedSpeechVoice() async throws {
+        let voice = SpeechVoice(referenceID: "0123456789abcdef0123456789abcdef")
+        let server = StubServer { _ in
+            .json(200, #"{"ok":true,"provider":"fish","reference_id":"0123456789abcdef0123456789abcdef","model":"s2.1-pro","mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,YWJj"}"#)
+        }
+        let audio = try await server.client().speak(text: "Hello", voice: voice)
+        let request = try #require(server.requests.first)
+        let body = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: String])
+        #expect(request.method == "POST")
+        #expect(request.path == "/api/audio/speak")
+        #expect(body == ["text": "Hello", "reference_id": voice.referenceID, "model": "s2.1-pro"])
+        #expect(audio.fileExtension == "mp3")
+    }
+
+    @Test("Speech rejects legacy or mismatched provider, voice and model acknowledgments", arguments: [
+        #"{"ok":true,"mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,YWJj"}"#,
+        #"{"ok":true,"provider":"openai","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro","mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,YWJj"}"#,
+        #"{"ok":true,"provider":"fish","reference_id":"0123456789abcdef0123456789abcdef","model":"s2.1-pro","mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,YWJj"}"#,
+        #"{"ok":true,"provider":"fish","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro-free","mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,YWJj"}"#
+    ])
+    func mismatchedSpeechAcknowledgment(body: String) async {
+        let server = StubServer { _ in .json(200, body) }
+        let error = await #expect(throws: APIError.self) {
+            try await server.client().speak(text: "Hello", voice: .defaultVoice)
+        }
+        guard case .invalidResponse? = error else { Issue.record("Expected invalidResponse"); return }
+    }
+
+    @Test("Invalid voices and unpaid models fail before sending speech", arguments: [
+        SpeechVoice(referenceID: "invalid"),
+        SpeechVoice(referenceID: "0123456789abcdef0123456789abcdeg"),
+        SpeechVoice(referenceID: SpeechVoice.defaultReferenceID, modelID: "s2.1-pro-free")
+    ])
+    func invalidSpeechVoice(voice: SpeechVoice) async {
+        let server = StubServer { _ in .json(500, #"{"error":"Unexpected request"}"#) }
+        let error = await #expect(throws: APIError.self) {
+            try await server.client().speak(text: "Hello", voice: voice)
+        }
+        guard case .cannotPrepare? = error else { Issue.record("Expected cannotPrepare"); return }
+        #expect(server.requests.isEmpty)
+    }
+
     @Test("Speech refuses corrupt base64 and mismatched MIME declarations", arguments: [
-        #"{"ok":true,"mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,%%%"}"#,
-        #"{"ok":true,"mime_type":"audio/mpeg","data_url":"data:text/html;base64,YWJj"}"#,
-        #"{"ok":true,"mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,"}"#
+        #"{"ok":true,"provider":"fish","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro","mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,%%%"}"#,
+        #"{"ok":true,"provider":"fish","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro","mime_type":"audio/mpeg","data_url":"data:text/html;base64,YWJj"}"#,
+        #"{"ok":true,"provider":"fish","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro","mime_type":"audio/mpeg","data_url":"data:audio/mpeg;base64,"}"#
     ])
     func corruptSpeech(body: String) async {
         let server = StubServer { _ in .json(200, body) }
-        let error = await #expect(throws: APIError.self) { try await server.client().speak(text: "Hello") }
+        let error = await #expect(throws: APIError.self) { try await server.client().speak(text: "Hello", voice: .defaultVoice) }
         guard case .invalidResponse? = error else { Issue.record("Expected invalidResponse"); return }
     }
 }

@@ -5,7 +5,7 @@ The app uses native Hermes agent/speech APIs plus three exact authenticated prox
 ## Authentication and ingress
 
 - Every app request uses `Authorization: Bearer <API_SERVER_KEY>` at `https://hermes.sashakuzina.com`.
-- The native agent validates that key. Speech and file routes first use native forwardAuth to validate the same Bearer token, then replace client-supplied dashboard/cookie headers with the server's dashboard credential. A dashboard token alone cannot authenticate on the new hostname.
+- The native agent validates that key. Transcription and file routes use native forwardAuth before server-side dashboard credential injection. Mobile synthesis is handled by the narrowly scoped Fish speech service, which validates the same native Bearer key directly and keeps Fish credentials server-side. Dashboard tokens alone cannot authenticate on the public hostname.
 - The app has no separate voice/file URL or token. Redirects are refused to avoid forwarding credentials to another origin.
 - HTTPS is required outside trusted local networks; the iOS app permits local-network HTTP under its ATS configuration.
 
@@ -104,12 +104,16 @@ The app records AAC, 16 kHz, mono in `.m4a`. Raw recordings must be nonempty and
 ### `POST /api/audio/speak`
 
 ```json
-{"text":"Hermes's reply"}
+{"text":"Hermes's reply","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro"}
 ```
 
-Response: `{"ok":true,"data_url":"data:audio/mpeg;base64,...","mime_type":"audio/mpeg","provider":"fish"}`.
+Response: `{"ok":true,"data_url":"data:audio/mpeg;base64,...","mime_type":"audio/mpeg","provider":"fish","reference_id":"933563129e564b19a115bedd57b7406a","model":"s2.1-pro"}`.
 
-Hermes uses its configured TTS provider/voice. The client sends the assistant reply's semantic plain text, not its HTML/CSS/JavaScript, then checks MIME/data-URL agreement and decodes the audio into protected local storage. Voice-origin agent turns trigger synthesis automatically; brain dumps do not. Text-origin turns synthesize only when the user taps Listen. Existing generated audio is reused, including after relaunch. Automatic playback is limited to the active visible chat and never interrupts a recording.
+Fish **2.1 Pro** is explicitly selected by the upstream `model: s2.1-pro` header; the free model is not used. Sarah (`933563129e564b19a115bedd57b7406a`) is the default. New mobile clients send the chosen reference and paid model on every synthesis request and require matching acknowledgment, so an old text-only endpoint cannot silently ignore voice selection. Older text-only clients receive the same default voice/model. Other explicit models, malformed references, and unknown fields are rejected before contacting Fish. Missing text retains the native `422` readiness shape.
+
+The app sends semantic plain text, not HTML/CSS/JavaScript. Voice-origin turns synthesize automatically; text replies synthesize only on Listen; brain dumps remain silent. Cached assistant audio stores its actual voice/model identity and is reused only when both match the current selection. Legacy unknown-voice caches regenerate on next use; original user recordings are untouched. A changed selection stops loaded playback and invalidates old in-flight results, including change-away-and-back races. Pending automatic speech follows the latest selection; stale on-demand speech waits for a fresh Listen. Audio metadata is committed before retiring replaced files.
+
+`hermesapp/speech/` contains the authenticated endpoint and native command adapter. Long text is split into ordered, at-most-4000-character chunks without truncation; real ffmpeg assembles multiple MP3 chunks. Provider failures remain visible, without retries or a free-model fallback. The endpoint bounds input to 64000 characters/256 KiB and audio to 32 MiB.
 
 ## Conversation history
 
@@ -174,6 +178,9 @@ Public base: `https://hermes.sashakuzina.com`.
 - Bridge/system firewall rules restrict access to the current Traefik bridge address, `172.23.0.6`. If that container address changes, update both the systemd allowlist and UFW rules before restarting the bridge.
 - App secret: `~/.hermes/.env` → `API_SERVER_KEY`. Server-only dashboard secret: `~/.hermes/dashboard-remote.env` → `HERMES_DASHBOARD_SESSION_TOKEN`. Keep internal credential injection after native Bearer authentication; rotating dashboard credentials requires restarting their native services and updating the protected proxy configuration.
 - `stt.local.language: auto` avoids the native local-command path's English fallback. Fish command providers remain configured in Hermes, not in this app.
+- Paid mobile synthesis runs as `hermes-speech.service` on `127.0.0.1:9124`, with `DynamicUser`, a read-only system/home sandbox, private temporary files, and only two named systemd credentials from root-only `/etc/hermes-speech/`. `hermes-mobile-speech-bridge.socket`/`.service` exposes `172.23.0.1:9124` only to the current Traefik source and loopback; the corresponding UFW rule is source/interface scoped.
+- `/etc/dokploy/traefik/dynamic/hermes-speech.yml` (mode0600, priority310) overrides only current-host `POST /api/audio/speak`. Transcription, native chat, and administrative route boundaries are unchanged.
+- Native Hermes Fish defaults are also Sarah and paid `s2.1-pro`, through `tts.providers.fish.voice/model` and the tracked `fish_tts.py` command adapter. Its command explicitly supplies `--api-key-file /etc/hermes-speech/fish-key`, so cold native contexts do not depend on process-environment dotenv loading. The private key file is bounded, owner-checked, regular-file-only, and fail-closed; inherited `FISH_API_KEY` remains supported when no file option is specified. Existing native chunk caps/timing were not increased, and gateway/dashboard were not restarted. Protected original configuration/helper rollback resides under `/root/.hermes/backups/fish-speech-20261002T203437Z/`.
 
 Never place secret values in source control, screenshots, command output, or documentation.
 

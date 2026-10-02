@@ -1,0 +1,28 @@
+[Unit]
+Description=Authenticated paid Fish speech for Hermes mobile
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/hermes-speech
+ExecStart=/opt/hermes-speech/.venv/bin/python /opt/hermes-speech/speech_server.py
+LoadCredential=api-key:/etc/hermes-speech/api-key
+LoadCredential=fish-key:/etc/hermes-speech/fish-key
+Environment=SPEECH_HOST=127.0.0.1
+Environment=SPEECH_PORT=9124
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

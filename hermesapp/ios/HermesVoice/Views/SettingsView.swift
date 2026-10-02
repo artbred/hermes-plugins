@@ -6,12 +6,14 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var serverURL = ""
     @State private var token = ""
+    @State private var voiceID = SpeechVoice.defaultReferenceID
+    @State private var useDefaultVoice = true
     @State private var test: TestState = .idle
     @State private var testTask: Task<Void, Never>?
     @State private var saveError: String?
     @FocusState private var focusedField: Field?
 
-    private enum Field { case serverURL, token }
+    private enum Field { case serverURL, token, voiceID }
     private enum TestState {
         case idle, running
         case success(String), failure(String)
@@ -40,7 +42,7 @@ struct SettingsView: View {
             } header: {
                 Label("Hermes connection", systemImage: "server.rack")
             } footer: {
-                Text("One server URL and API token connect chats, voice, files, and memory. Models, voices, and provider keys stay on your Hermes server.")
+                Text("One server URL and API token connect chats, voice, files, and memory. Provider keys stay on your Hermes server.")
             }
             Section {
                 Button {
@@ -59,6 +61,32 @@ struct SettingsView: View {
                 testResult
             } footer: {
                 Text("Checks the connected services without sending a chat or changing server data. Your URL and token are saved securely in your iPhone’s Keychain.")
+            }
+            Section {
+                Picker("Voice", selection: $useDefaultVoice) {
+                    Text("Sarah (default)").tag(true)
+                    Text("Custom Fish voice").tag(false)
+                }
+                .accessibilityIdentifier("speechVoicePicker")
+                if useDefaultVoice {
+                    LabeledContent("Voice ID") {
+                        Text(SpeechVoice.defaultReferenceID)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityIdentifier("defaultSpeechVoice")
+                } else {
+                    TextField("32-character Fish voice ID", text: $voiceID)
+                        .focused($focusedField, equals: .voiceID)
+                        .accessibilityLabel("Fish voice ID")
+                        .accessibilityIdentifier("speechVoiceIDField")
+                }
+                LabeledContent("Speech model", value: "Fish 2.1 Pro")
+                    .accessibilityIdentifier("speechModelSetting")
+            } header: {
+                Label("Reply voice", systemImage: "speaker.wave.2")
+            } footer: {
+                Text("Your default voice is used automatically for spoken replies and Listen. Choose Custom to paste another Fish voice ID. Speech explicitly uses the paid 2.1 Pro model. Changing voices regenerates reply audio when needed; original recordings are kept.")
             }
             Section {
                 Text(model.notifications?.status ?? "Notifications unavailable")
@@ -100,6 +128,8 @@ struct SettingsView: View {
         .onAppear {
             serverURL = model.settings.serverURL
             token = model.settings.token
+            voiceID = model.settings.voiceID
+            useDefaultVoice = voiceID == SpeechVoice.defaultReferenceID
         }
         .onChange(of: [serverURL, token]) { _, _ in
             testTask?.cancel()
@@ -148,6 +178,8 @@ struct SettingsView: View {
     private var validationError: String? {
         guard APIClient.baseURL(from: serverURL) != nil else { return "Enter a valid HTTP or HTTPS Hermes server URL." }
         guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Enter your Hermes API token." }
+        let selected = useDefaultVoice ? SpeechVoice.defaultReferenceID : voiceID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard SpeechVoice.isValidReferenceID(selected) else { return "Enter a Fish voice ID containing exactly 32 hexadecimal characters." }
         return nil
     }
 
@@ -155,7 +187,8 @@ struct SettingsView: View {
         focusedField = nil
         if let validationError { saveError = validationError; return }
         do {
-            try model.settings.save(serverURL: serverURL, token: token)
+            try model.settings.save(serverURL: serverURL, token: token,
+                                    voiceID: useDefaultVoice ? SpeechVoice.defaultReferenceID : voiceID)
             model.settingsChanged()
             dismiss()
         } catch {

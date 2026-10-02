@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 import Synchronization
 @testable import HermesVoice
@@ -218,6 +219,11 @@ struct ChatTests {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let audio = Self.wave.base64EncodedString()
+        let service = "HermesVoiceTests-\(UUID().uuidString)"
+        defer { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary) }
+        let settings = AppSettings(service: service)
+        let voice = SpeechVoice(referenceID: "0123456789abcdef0123456789abcdef")
+        try settings.save(serverURL: AppSettings.defaultURL, token: "", voiceID: voice.referenceID)
         let server = StubServer { request in
             switch (request.method, request.path) {
             case ("POST", "/api/audio/transcribe"):
@@ -235,7 +241,7 @@ struct ChatTests {
             case ("PATCH", "/api/sessions/session-policy"):
                 return .json(200, #"{"session":{"id":"session-policy","title":"Simple addition"}}"#)
             case ("POST", "/api/audio/speak"):
-                return .json(200, "{\"ok\":true,\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
+                return .json(200, "{\"ok\":true,\"provider\":\"fish\",\"reference_id\":\"\(voice.referenceID)\",\"model\":\"s2.1-pro\",\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
             default: return .json(404, #"{"detail":"Not found"}"#)
             }
         }
@@ -244,7 +250,7 @@ struct ChatTests {
         if let voiceFile { try Data([1]).write(to: store.audioURL(fileName: voiceFile)) }
         let chat = Chat(messages: [ChatMessage(role: .user, input: input, text: input == .voice ? "" : "What is seven plus five?", audioFileName: voiceFile)])
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client())
         model.selectedChatID = nil // Do not play into the test host's shared audio session.
         model.scenePhaseChanged(.active)
         #expect(await eventually { store.chat(id: chat.id)?.messages.last?.role == .assistant })
@@ -265,6 +271,11 @@ struct ChatTests {
         }
         await model.play(try #require(store.chat(id: chat.id)?.messages.last))
         #expect(server.requests.filter { $0.path == "/api/audio/speak" }.count == 1) // Cached audio is reused.
+        #expect(store.chat(id: chat.id)?.messages.last?.speechVoice == voice)
+        let request = try #require(server.requests.first { $0.path == "/api/audio/speak" })
+        let body = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: String])
+        #expect(body["reference_id"] == voice.referenceID)
+        #expect(body["model"] == "s2.1-pro")
     }
 
     @Test("Resuming an accepted run never submits a second agent turn")
@@ -329,7 +340,7 @@ struct ChatTests {
         let audio = Self.wave.base64EncodedString()
         let server = StubServer { request in
             guard request.path == "/api/audio/speak" else { return .json(404, #"{"detail":"Not found"}"#) }
-            return .json(200, "{\"ok\":true,\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
+            return .json(200, "{\"ok\":true,\"provider\":\"fish\",\"reference_id\":\"\(SpeechVoice.defaultReferenceID)\",\"model\":\"s2.1-pro\",\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
         }
         let reply = ChatMessage(role: .assistant, text: """
         <article><h2>Today</h2><p>Review &amp; send.</p>

@@ -1,0 +1,16 @@
+[Unit]
+Description=Forward private mobile speech ingress to authenticated Fish service
+Requires=hermes-mobile-speech-bridge.socket hermes-speech.service
+After=hermes-mobile-speech-bridge.socket hermes-speech.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:9124
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8
+IPAddressAllow=172.23.0.6/32

@@ -68,7 +68,7 @@ Only server-owned conversation history and titles are shared. Recordings, downlo
 
 Enable Hermes's native `api_server` platform and set `API_SERVER_KEY`, `API_SERVER_HOST`, and `API_SERVER_PORT` in the Hermes environment. Keep TLS/authentication in front of it. Enable the native dashboard backend for its speech routes, but **do not expose its administrative API** to the phone's public hostname.
 
-The phone uses the configured `stt` and `tts` providers. For the installed local-command STT path, explicitly set:
+The phone uses native Hermes transcription and a narrowly scoped authenticated Fish synthesis endpoint. Native Hermes and mobile synthesis default to Fish Official **Sarah** (`933563129e564b19a115bedd57b7406a`) with explicitly paid **2.1 Pro** (`s2.1-pro`). Mobile Settings → Reply voice lets the phone retain that default or save another Fish voice ID; this per-request phone override does not change the shared native default. Provider keys stay server-side. For the installed local-command STT path, explicitly set:
 
 ```yaml
 stt:
@@ -78,7 +78,7 @@ stt:
     language: auto
 ```
 
-An empty language setting on this native path can fall back to English. Current deployment uses Fish through the existing Hermes STT/TTS command-provider configuration.
+An empty language setting on this native path can fall back to English. Fish transcription remains on the existing native route; selectable paid synthesis is implemented in `speech/`, preserving the same mobile URL/API token and keeping desktop administration private. See [`docs/API.md`](docs/API.md#native-speech) for deployment and cache identity details.
 
 ## Delivery and persistence
 

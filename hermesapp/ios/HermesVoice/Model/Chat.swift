@@ -29,6 +29,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var runID: String?
     var remoteMessageID: String?
     var audioFileName: String?
+    var speechVoice: SpeechVoice?
     var error: String?
     var replyTo: String?
     // Uncertain transport failures reuse this key. Explicit retry of a terminal or
@@ -104,6 +105,7 @@ struct Chat: Identifiable, Codable, Equatable, Sendable {
                 if local.role == .assistant, local.text != row.text {
                     local.text = row.text
                     local.audioFileName = nil
+                    local.speechVoice = nil
                     local.needsSpeech = false
                 }
                 merged.append(local)

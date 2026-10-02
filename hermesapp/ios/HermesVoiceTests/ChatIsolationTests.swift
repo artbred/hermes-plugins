@@ -20,7 +20,7 @@ struct ChatIsolationTests {
             }
         }
         let user = ChatMessage(role: .user, input: .voice, text: "Phone question", stage: .completed, runID: "phone-run", audioFileName: "take.m4a")
-        let reply = ChatMessage(role: .assistant, input: .voice, text: "Phone answer", stage: .completed, runID: "phone-run", audioFileName: "reply.mp3", replyTo: user.id)
+        let reply = ChatMessage(role: .assistant, input: .voice, text: "Phone answer", stage: .completed, runID: "phone-run", audioFileName: "reply.mp3", speechVoice: .defaultVoice, replyTo: user.id)
         let store = ChatStore(directory: directory)
         let chat = Chat(sessionID: "shared", messages: [user, reply], titleGenerated: true)
         try store.save(chat)
@@ -31,6 +31,7 @@ struct ChatIsolationTests {
         #expect(saved.messages.map(\.text) == ["Phone question", "Phone answer", "Desktop follow-up", "Shared answer"])
         #expect(saved.messages.prefix(2).map(\.id) == [user.id, reply.id])
         #expect(saved.messages.prefix(2).map(\.audioFileName) == ["take.m4a", "reply.mp3"])
+        #expect(saved.messages[1].speechVoice == .defaultVoice)
         #expect(saved.messages[1].replyTo == user.id)
         #expect(saved.title == "Shared conversation")
         #expect(ChatStore(directory: directory).chat(id: chat.id) == saved)
@@ -55,7 +56,7 @@ struct ChatIsolationTests {
                                 remoteMessageID: legacyRow ? nil : "2")
         let final = ChatMessage(id: "\(user.id)-reply-0", role: .assistant, input: .voice,
                                 text: "Both repositories are ready for automation.", stage: .completed,
-                                runID: "one", audioFileName: "reply.mp3", replyTo: user.id)
+                                runID: "one", audioFileName: "reply.mp3", speechVoice: .defaultVoice, replyTo: user.id)
         let next = ChatMessage(id: "remote-shared-4", role: .user, text: "Repeat that", stage: .completed, remoteMessageID: "4")
         let repeated = ChatMessage(id: "remote-shared-5", role: .assistant, text: final.text, stage: .completed, remoteMessageID: "5")
         let store = ChatStore(directory: directory)
@@ -72,6 +73,7 @@ struct ChatIsolationTests {
         #expect(saved.messages[1].remoteMessageID == "3")
         #expect(saved.messages[1].replyTo == user.id)
         #expect(saved.messages[1].audioFileName == "reply.mp3")
+        #expect(saved.messages[1].speechVoice == .defaultVoice)
         #expect(try Data(contentsOf: store.audioURL(fileName: "input.m4a")) == Data([1, 2, 3]))
         #expect(try Data(contentsOf: store.audioURL(fileName: "reply.mp3")) == Data([4, 5, 6]))
         #expect(ChatStore(directory: directory).chat(id: chat.id) == saved)
@@ -176,7 +178,7 @@ struct ChatIsolationTests {
     func sharedStableRows() throws {
         let remote = try JSONDecoder().decode([RemoteMessage].self, from: Data(#"[{"id":1,"role":"user","content":"Repeat"},{"id":2,"role":"assistant","content":"Edited reply"},{"id":3,"role":"user","content":"Repeat"},{"id":4,"role":"assistant","content":"Second reply"}]"#.utf8))
         let first = ChatMessage(role: .user, input: .voice, text: "Repeat", stage: .completed, runID: "one", remoteMessageID: "1", audioFileName: "first.m4a")
-        let reply = ChatMessage(role: .assistant, text: "Old reply", stage: .completed, remoteMessageID: "2", audioFileName: "old.mp3")
+        let reply = ChatMessage(role: .assistant, text: "Old reply", stage: .completed, remoteMessageID: "2", audioFileName: "old.mp3", speechVoice: .defaultVoice)
         let second = ChatMessage(role: .user, text: "Repeat", stage: .completed, runID: "two")
         var chat = Chat(sessionID: "shared", messages: [first, reply, second])
         chat.mergeHistory(remote, sessionID: "shared")
@@ -185,6 +187,7 @@ struct ChatIsolationTests {
         #expect(chat.messages.prefix(3).map(\.id) == [first.id, reply.id, second.id])
         #expect(chat.messages[0].audioFileName == "first.m4a")
         #expect(chat.messages[1].audioFileName == nil)
+        #expect(chat.messages[1].speechVoice == nil)
     }
 
     @Test("An attachment import in A cannot prevent sending in B", arguments: [false, true])

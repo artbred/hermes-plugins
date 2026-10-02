@@ -725,13 +725,26 @@ struct APIClient: Sendable {
         return response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func speak(text: String) async throws -> SpeechAudio {
-        struct Body: Encodable { var text: String }
-        struct Response: Decodable { var ok: Bool; var data_url: String; var mime_type: String }
+    func speak(text: String, voice: SpeechVoice) async throws -> SpeechAudio {
+        guard SpeechVoice.isValidReferenceID(voice.referenceID), voice.modelID == SpeechVoice.model else {
+            throw APIError.cannotPrepare("Choose a valid Fish voice using the paid 2.1 Pro model in Settings.")
+        }
+        struct Body: Encodable { var text: String; var reference_id: String; var model: String }
+        struct Response: Decodable {
+            var ok: Bool
+            var data_url: String
+            var mime_type: String
+            var provider: String?
+            var reference_id: String?
+            var model: String?
+        }
         var request = try request(["api", "audio", "speak"], method: "POST")
         request.timeoutInterval = 180
-        request.httpBody = try JSONEncoder().encode(Body(text: text))
+        request.httpBody = try JSONEncoder().encode(Body(text: text, reference_id: voice.referenceID, model: SpeechVoice.model))
         let response = try Self.decode(Response.self, from: await send(request))
+        guard response.provider == "fish", response.reference_id == voice.referenceID, response.model == voice.modelID else {
+            throw APIError.invalidResponse("The speech server did not acknowledge the selected Fish voice and paid 2.1 Pro model. Update the server, then tap Listen to retry.")
+        }
         let extensions = ["audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/wav": "wav", "audio/flac": "flac"]
         guard response.ok, let ext = extensions[response.mime_type],
               response.data_url.hasPrefix("data:\(response.mime_type);base64,"),

@@ -6,27 +6,31 @@ import Observation
 final class AppSettings {
     private(set) var serverURL: String
     private(set) var token: String
+    private(set) var voiceID: String
     private(set) var storageError: String?
 
     static let defaultURL = "https://hermes.sashakuzina.com"
-    nonisolated private static let service = "com.artbred.hermesapp"
+    nonisolated static let service = "com.artbred.hermesapp"
+    @ObservationIgnored private let keychainService: String
 
     private enum Key: String, CaseIterable {
-        case nativeServerURL, nativeAPIToken
+        case nativeServerURL, nativeAPIToken, nativeVoiceID
         // Read only during the one-time credential migration, then delete.
         case nativeSpeechURL, nativeSpeechToken
 
-        var item: KeychainItem { KeychainItem(service: AppSettings.service, account: rawValue) }
+        func item(service: String) -> KeychainItem { KeychainItem(service: service, account: rawValue) }
     }
 
-    init() {
-        let savedServer = Key.nativeServerURL.item.read()
+    init(service: String = AppSettings.service) {
+        keychainService = service
+        let savedServer = Key.nativeServerURL.item(service: service).read()
         serverURL = savedServer ?? Self.defaultURL
-        token = Key.nativeAPIToken.item.read() ?? ""
+        token = Key.nativeAPIToken.item(service: service).read() ?? ""
+        voiceID = Key.nativeVoiceID.item(service: service).read() ?? SpeechVoice.defaultReferenceID
         let destination = Self.migratedURL(serverURL)
-        if savedServer != nil || Key.nativeSpeechURL.item.read() != nil || Key.nativeSpeechToken.item.read() != nil {
+        if savedServer != nil || Key.nativeSpeechURL.item(service: service).read() != nil || Key.nativeSpeechToken.item(service: service).read() != nil {
             do {
-                try save(serverURL: destination, token: token)
+                try save(serverURL: destination, token: token, voiceID: voiceID)
             } catch {
                 // Keep the original in-memory values if the atomic migration cannot finish.
                 storageError = error.localizedDescription
@@ -35,20 +39,23 @@ final class AppSettings {
     }
 
     var isConfigured: Bool { makeClient() != nil }
+    var speechVoice: SpeechVoice { SpeechVoice(referenceID: voiceID) }
 
-    func save(serverURL: String, token: String) throws {
+    func save(serverURL: String, token: String, voiceID: String) throws {
         let url = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let voice = voiceID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard APIClient.baseURL(from: url) != nil else { throw SettingsError.invalidURL }
-        let values: [String?] = [url, token.isEmpty ? nil : token, nil, nil]
+        guard SpeechVoice.isValidReferenceID(voice) else { throw SettingsError.invalidVoice }
+        let values: [String?] = [url, token.isEmpty ? nil : token, voice, nil, nil]
         let keys = Key.allCases
-        let previous = keys.map { $0.item.read() }
+        let previous = keys.map { $0.item(service: keychainService).read() }
         var written: [Int] = []
         for index in keys.indices where values[index] != previous[index] {
-            guard keys[index].item.write(values[index]) else {
+            guard keys[index].item(service: keychainService).write(values[index]) else {
                 var restored = true
                 for changed in written.reversed() {
-                    if !keys[changed].item.write(previous[changed]) { restored = false }
+                    if !keys[changed].item(service: keychainService).write(previous[changed]) { restored = false }
                 }
                 throw SettingsError.keychain(restored: restored)
             }
@@ -56,6 +63,7 @@ final class AppSettings {
         }
         self.serverURL = url
         self.token = token
+        self.voiceID = voice
         storageError = nil
     }
 
@@ -81,11 +89,12 @@ final class AppSettings {
     }
 
     private enum SettingsError: LocalizedError {
-        case invalidURL, keychain(restored: Bool)
+        case invalidURL, invalidVoice, keychain(restored: Bool)
 
         var errorDescription: String? {
             switch self {
             case .invalidURL: "Enter a valid HTTPS Hermes server URL."
+            case .invalidVoice: "Enter a Fish voice ID containing exactly 32 hexadecimal characters."
             case .keychain(true): "The Keychain could not save your connection. Your previous settings were kept. Unlock your iPhone and try again."
             case .keychain(false): "The Keychain could not save or fully restore your connection. Unlock your iPhone and save the server URL and token again."
             }
