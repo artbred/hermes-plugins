@@ -30,6 +30,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var remoteMessageID: String?
     var audioFileName: String?
     var speechVoice: SpeechVoice?
+    // The Settings selection used to route this audio can differ from its actual voice.
+    var speechGeneralVoice: SpeechVoice?
     var error: String?
     var replyTo: String?
     // Uncertain transport failures reuse this key. Explicit retry of a terminal or
@@ -52,6 +54,12 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var isBrainDump: Bool { classification == .brainDump }
 
     var requestKey: String { "\(id)-\(attempt)" }
+
+    func hasSpeech(for generalVoice: SpeechVoice) -> Bool {
+        speechGeneralVoice == generalVoice &&
+        (speechVoice == generalVoice || speechVoice == .russianVoice) &&
+        speechVoice?.modelID == SpeechVoice.model
+    }
 }
 
 struct Chat: Identifiable, Codable, Equatable, Sendable {
@@ -106,6 +114,7 @@ struct Chat: Identifiable, Codable, Equatable, Sendable {
                     local.text = row.text
                     local.audioFileName = nil
                     local.speechVoice = nil
+                    local.speechGeneralVoice = nil
                     local.needsSpeech = false
                 }
                 merged.append(local)

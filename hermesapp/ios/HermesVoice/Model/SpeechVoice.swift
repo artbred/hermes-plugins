@@ -4,6 +4,7 @@ struct SpeechVoice: Codable, Equatable, Sendable {
     static let defaultReferenceID = "933563129e564b19a115bedd57b7406a"
     static let model = "s2.1-pro"
     static let defaultVoice = SpeechVoice(referenceID: defaultReferenceID)
+    static let russianVoice = SpeechVoice(referenceID: "c35aeeb5f9c145199fbffdbc2ef8ed95")
 
     let referenceID: String
     // Store the actual model with cached audio, rather than relabeling old audio

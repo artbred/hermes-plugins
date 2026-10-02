@@ -19,6 +19,7 @@ from fish_tts import (
     validate_reference_id,
     validate_text,
 )
+from language_voice import LanguageVoice
 
 MAX_REQUEST_BYTES = 1024 * 1024
 
@@ -34,10 +35,19 @@ def environment_secret(name, credential):
     return value.strip()
 
 
+def language_api_key():
+    # The optional advisor must not affect readiness or explicit synthesis when unavailable.
+    try:
+        return environment_secret("OPENROUTER_API_KEY", "jev-key")
+    except (ValueError, OSError):
+        return ""
+
+
 @dataclass(frozen=True)
 class Config:
     api_key: str = field(repr=False)
     fish_key: str = field(repr=False)
+    jev_key: str = field(default="", repr=False)
 
     def __post_init__(self):
         if not self.api_key or not self.fish_key:
@@ -46,7 +56,7 @@ class Config:
     @classmethod
     def from_environment(cls):
         return cls(environment_secret("API_SERVER_KEY", "api-key"),
-                   environment_secret("FISH_API_KEY", "fish-key"))
+                   environment_secret("FISH_API_KEY", "fish-key"), language_api_key())
 
 
 def validation_failure(location, message, kind="value_error"):
@@ -63,8 +73,9 @@ def reject_duplicate_fields(pairs):
     return body
 
 
-def create_app(config, speech=None):
+def create_app(config, speech=None, language=None):
     speech = speech or FishSpeech(config.fish_key)
+    language = language or LanguageVoice(config.jev_key)
 
     @web.middleware
     async def authenticate(request, handler):
@@ -76,7 +87,7 @@ def create_app(config, speech=None):
 
     app = web.Application(middlewares=[authenticate], client_max_size=MAX_REQUEST_BYTES)
 
-    async def speak(request):
+    async def speech_request(request):
         if request.content_type != "application/json":
             return web.json_response({"detail": "Expected application/json"}, status=415)
         try:
@@ -102,6 +113,24 @@ def create_app(config, speech=None):
                 validate(value)
             except ValueError as error:
                 return validation_failure([name], str(error))
+        return text, reference_id, model
+
+    async def voice(request):
+        inputs = await speech_request(request)
+        if isinstance(inputs, web.Response):
+            return inputs
+        text, reference_id, model = inputs
+        effective_reference_id, classification = await language.select(text, reference_id)
+        return web.json_response({
+            "provider": "fish", "reference_id": effective_reference_id,
+            "model": model, "language": classification,
+        })
+
+    async def speak(request):
+        inputs = await speech_request(request)
+        if isinstance(inputs, web.Response):
+            return inputs
+        text, reference_id, model = inputs
         try:
             audio = await speech.synthesize(text, reference_id, model)
         except SpeechError as error:
@@ -115,9 +144,13 @@ def create_app(config, speech=None):
 
     async def lifecycle(_app):
         yield
-        await speech.close()
+        try:
+            await language.close()
+        finally:
+            await speech.close()
 
     app.router.add_post("/api/audio/speak", speak)
+    app.router.add_post("/api/audio/voice", voice)
     app.cleanup_ctx.append(lifecycle)
     return app
 

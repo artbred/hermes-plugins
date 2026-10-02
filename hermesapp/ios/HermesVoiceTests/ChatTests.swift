@@ -240,6 +240,8 @@ struct ChatTests {
                 return .json(200, #"{"session_id":"session-policy","data":[]}"#)
             case ("PATCH", "/api/sessions/session-policy"):
                 return .json(200, #"{"session":{"id":"session-policy","title":"Simple addition"}}"#)
+            case ("POST", "/api/audio/voice"):
+                return .json(200, "{\"provider\":\"fish\",\"reference_id\":\"\(voice.referenceID)\",\"model\":\"s2.1-pro\",\"language\":\"english\"}")
             case ("POST", "/api/audio/speak"):
                 return .json(200, "{\"ok\":true,\"provider\":\"fish\",\"reference_id\":\"\(voice.referenceID)\",\"model\":\"s2.1-pro\",\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
             default: return .json(404, #"{"detail":"Not found"}"#)
@@ -272,6 +274,8 @@ struct ChatTests {
         await model.play(try #require(store.chat(id: chat.id)?.messages.last))
         #expect(server.requests.filter { $0.path == "/api/audio/speak" }.count == 1) // Cached audio is reused.
         #expect(store.chat(id: chat.id)?.messages.last?.speechVoice == voice)
+        #expect(store.chat(id: chat.id)?.messages.last?.speechGeneralVoice == voice)
+        #expect(server.requests.filter { $0.path == "/api/audio/voice" }.count == 1)
         let request = try #require(server.requests.first { $0.path == "/api/audio/speak" })
         let body = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: String])
         #expect(body["reference_id"] == voice.referenceID)
@@ -339,6 +343,9 @@ struct ChatTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let audio = Self.wave.base64EncodedString()
         let server = StubServer { request in
+            if request.path == "/api/audio/voice" {
+                return .json(200, "{\"provider\":\"fish\",\"reference_id\":\"\(SpeechVoice.defaultReferenceID)\",\"model\":\"s2.1-pro\",\"language\":\"english\"}")
+            }
             guard request.path == "/api/audio/speak" else { return .json(404, #"{"detail":"Not found"}"#) }
             return .json(200, "{\"ok\":true,\"provider\":\"fish\",\"reference_id\":\"\(SpeechVoice.defaultReferenceID)\",\"model\":\"s2.1-pro\",\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
         }
@@ -357,6 +364,9 @@ struct ChatTests {
         let body = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
         let text = try #require(body["text"] as? String)
         #expect(text.split(whereSeparator: \.isNewline).map(String.init) == ["Today", "Review & send."])
+        let selection = try #require(server.requests.first { $0.path == "/api/audio/voice" })
+        let selectionBody = try #require(JSONSerialization.jsonObject(with: selection.body) as? [String: String])
+        #expect(selectionBody["text"] == text)
         #expect(store.chat(id: chat.id)?.messages.last?.text == reply.text)
         #expect(store.chat(id: chat.id)?.messages.last?.audioFileName != nil)
     }

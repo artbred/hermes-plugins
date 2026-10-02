@@ -13,6 +13,8 @@ from pathlib import Path
 
 import httpx
 
+from language_voice import LanguageVoice
+
 API = "https://api.fish.audio/v1/tts"
 MODEL = "s2.1-pro"
 DEFAULT_REFERENCE_ID = "933563129e564b19a115bedd57b7406a"
@@ -186,6 +188,7 @@ def command_arguments(argv=None, environment=None):
     environment = os.environ if environment is None else environment
     parser = argparse.ArgumentParser(description="Hermes paid Fish Audio command provider")
     parser.add_argument("--api-key-file", type=Path)
+    parser.add_argument("--language-api-key-file", type=Path)
     parser.add_argument("input_path", type=Path)
     parser.add_argument("output_path", type=Path)
     parser.add_argument("voice", nargs="?", default="")
@@ -208,8 +211,13 @@ def command_api_key(args, environment=None):
     if args.api_key_file is None:
         environment = os.environ if environment is None else environment
         return environment.get("FISH_API_KEY", "")
+    return private_api_key(args.api_key_file)
+
+
+def private_api_key(path):
+    """Read a bounded, owned, private regular file without following symlinks or blocking on FIFOs."""
     try:
-        descriptor = os.open(args.api_key_file, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(descriptor, "rb") as source:
             metadata = os.fstat(source.fileno())
             if (
@@ -231,6 +239,17 @@ def command_api_key(args, environment=None):
     return key
 
 
+def command_language_api_key(args, environment=None):
+    """Unavailable optional Jev credentials abstain, never overriding an explicit file with env."""
+    if args.language_api_key_file is None:
+        environment = os.environ if environment is None else environment
+        return environment.get("OPENROUTER_API_KEY", "")
+    try:
+        return private_api_key(args.language_api_key_file)
+    except SpeechError:
+        return ""
+
+
 async def run_command(args, api_key):
     # Bound the file read before decoding. Do not strip or silently truncate the input.
     with args.input_path.open("rb") as source:
@@ -241,11 +260,17 @@ async def run_command(args, api_key):
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError("text must contain valid UTF-8") from None
+    validate_text(text)
     speech = FishSpeech(api_key)
+    language = LanguageVoice(command_language_api_key(args))
     try:
-        audio = await speech.synthesize(text, args.voice, args.model, args.speed)
+        reference_id, _ = await language.select(text, args.voice)
+        audio = await speech.synthesize(text, reference_id, args.model, args.speed)
     finally:
-        await speech.close()
+        try:
+            await language.close()
+        finally:
+            await speech.close()
     # Leave no partial output, even when synthesis/assembly or a later chunk fails.
     args.output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=args.output_path.parent, prefix=".fish-speech-", delete=False) as out:

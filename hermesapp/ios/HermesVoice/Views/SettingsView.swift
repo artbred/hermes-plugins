@@ -86,7 +86,7 @@ struct SettingsView: View {
             } header: {
                 Label("Reply voice", systemImage: "speaker.wave.2")
             } footer: {
-                Text("Your default voice is used automatically for spoken replies and Listen. Choose Custom to paste another Fish voice ID. Speech explicitly uses the paid 2.1 Pro model. Changing voices regenerates reply audio when needed; original recordings are kept.")
+                Text("Your selected general voice is used for English replies and whenever language selection is uncertain or unavailable. Russian replies automatically use the Russian voice without changing this setting. Choose Custom to paste another Fish voice ID. Spoken replies and Listen always use the paid 2.1 Pro model. Changing the general voice regenerates reply audio when needed; original recordings are kept.")
             }
             Section {
                 Text(model.notifications?.status ?? "Notifications unavailable")

@@ -1,7 +1,7 @@
 http:
   routers:
     hermes-paid-speech:
-      rule: Host(`hermes.sashakuzina.com`) && Method(`POST`) && Path(`/api/audio/speak`)
+      rule: Host(`hermes.sashakuzina.com`) && Method(`POST`) && (Path(`/api/audio/speak`) || Path(`/api/audio/voice`))
       priority: 310
       entryPoints:
         - websecure

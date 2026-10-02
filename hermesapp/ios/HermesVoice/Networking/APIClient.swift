@@ -725,6 +725,36 @@ struct APIClient: Sendable {
         return response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func selectSpeechVoice(text: String, generalVoice: SpeechVoice) async throws -> SpeechVoice {
+        guard SpeechVoice.isValidReferenceID(generalVoice.referenceID), generalVoice.modelID == SpeechVoice.model else {
+            throw APIError.cannotPrepare("Choose a valid Fish voice using the paid 2.1 Pro model in Settings.")
+        }
+        try Task.checkCancellation()
+        do {
+            struct Body: Encodable { var text: String; var reference_id: String; var model: String }
+            struct Response: Decodable {
+                var provider: String
+                var reference_id: String
+                var model: String
+                var language: String
+            }
+            var request = try request(["api", "audio", "voice"], method: "POST")
+            request.httpBody = try JSONEncoder().encode(Body(text: text, reference_id: generalVoice.referenceID, model: generalVoice.modelID))
+            let response = try Self.decode(Response.self, from: await send(request))
+            try Task.checkCancellation()
+            guard response.provider == "fish", response.model == SpeechVoice.model,
+                  SpeechVoice.isValidReferenceID(response.reference_id),
+                  ["english", "russian", "other", "unknown"].contains(response.language) else { return generalVoice }
+            let expected = response.language == "russian" ? SpeechVoice.russianVoice : generalVoice
+            guard response.reference_id == expected.referenceID else { return generalVoice }
+            return expected
+        } catch {
+            if error is CancellationError { throw error }
+            try Task.checkCancellation()
+            return generalVoice
+        }
+    }
+
     func speak(text: String, voice: SpeechVoice) async throws -> SpeechAudio {
         guard SpeechVoice.isValidReferenceID(voice.referenceID), voice.modelID == SpeechVoice.model else {
             throw APIError.cannotPrepare("Choose a valid Fish voice using the paid 2.1 Pro model in Settings.")

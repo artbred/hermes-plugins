@@ -3,7 +3,7 @@ tts:
   providers:
     fish:
       type: command
-      command: /opt/hermes-speech/.venv/bin/python /opt/hermes-speech/fish_tts.py --api-key-file /etc/hermes-speech/fish-key {input_path} {output_path} {voice} {model} {speed}
+      command: /opt/hermes-speech/.venv/bin/python /opt/hermes-speech/fish_tts.py --api-key-file /etc/hermes-speech/fish-key --language-api-key-file /etc/hermes-speech/jev-key {input_path} {output_path} {voice} {model} {speed}
       output_format: mp3
       voice: 933563129e564b19a115bedd57b7406a
       model: s2.1-pro

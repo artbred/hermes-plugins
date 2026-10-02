@@ -719,7 +719,7 @@ final class AppModel {
         refreshSpeechSelection()
         guard let chat = store.chats.first(where: { $0.messages.contains(where: { $0.id == message.id }) }),
               let current = chat.messages.first(where: { $0.id == message.id }) else { return }
-        if playingMessageID == message.id, current.speechVoice == settings.speechVoice, current.audioFileName != nil {
+        if playingMessageID == message.id, current.hasSpeech(for: settings.speechVoice), current.audioFileName != nil {
             do {
                 if player.isPlaying { player.pause() }
                 else { try await player.resume() }
@@ -754,17 +754,17 @@ final class AppModel {
         defer { synthesizingMessageIDs.remove(message.id) }
         while !Task.isCancelled {
             refreshSpeechSelection()
-            let voice = settings.speechVoice
+            let generalVoice = settings.speechVoice
             let revision = speechSelectionRevision
             guard let current = store.chat(id: chatID)?.messages.first(where: { $0.id == message.id }) else { return }
             if automatic, !current.needsSpeech { return }
             do {
-                var fileName = current.speechVoice == voice ? current.audioFileName : nil
+                var fileName = current.hasSpeech(for: generalVoice) ? current.audioFileName : nil
                 if fileName == nil || !FileManager.default.fileExists(atPath: store.audioURL(fileName: fileName!).path) {
                     guard let client = makeClient() else { throw ChatError.notConfigured }
                     let speechText = await Task.detached(priority: .userInitiated) { ResponseContent(raw: current.text).plainText }.value
                     try Task.checkCancellation()
-                    guard revision == speechSelectionRevision, voice == settings.speechVoice else {
+                    guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else {
                         if automatic { continue }
                         return
                     }
@@ -772,9 +772,16 @@ final class AppModel {
                     guard !speechText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw APIError.cannotPrepare("This reply has no readable text to speak.")
                     }
+                    let voice = try await client.selectSpeechVoice(text: speechText, generalVoice: generalVoice)
+                    try Task.checkCancellation()
+                    guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else {
+                        if automatic { continue }
+                        return
+                    }
+                    guard store.chat(id: chatID)?.messages.first(where: { $0.id == message.id })?.text == current.text else { return }
                     let audio = try await client.speak(text: speechText, voice: voice)
                     try Task.checkCancellation()
-                    guard revision == speechSelectionRevision, voice == settings.speechVoice else {
+                    guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else {
                         // Pending automatic voice replies follow the latest selection. An
                         // on-demand Listen is discarded; the next Listen is a fresh request.
                         if automatic { continue }
@@ -788,6 +795,7 @@ final class AppModel {
                         try updateMessage(chatID, message.id) {
                             $0.audioFileName = name
                             $0.speechVoice = voice
+                            $0.speechGeneralVoice = generalVoice
                             $0.needsSpeech = false
                             $0.error = nil
                         }
@@ -805,15 +813,15 @@ final class AppModel {
                 } else if current.needsSpeech || current.error != nil {
                     try updateMessage(chatID, message.id) { $0.needsSpeech = false; $0.error = nil }
                 }
-                guard revision == speechSelectionRevision, voice == settings.speechVoice else { return }
+                guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else { return }
                 if let fileName, foreground, selectedChatID == chatID, !isRecordingInProgress,
                    !automatic || player.isIdle {
                     try await player.play(url: store.audioURL(fileName: fileName), messageID: message.id)
                 }
                 return
             } catch {
-                if Task.isCancelled { return }
-                guard revision == speechSelectionRevision, voice == settings.speechVoice else {
+                if Task.isCancelled || error is CancellationError { return }
+                guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else {
                     if automatic { continue }
                     return
                 }
