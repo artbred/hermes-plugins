@@ -2,11 +2,13 @@
 
 A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugins and the Hermes Voice iOS app. Additional independent plugins can be added under `plugins/`.
 
-## Plugins
+## Archived plugins — retired
 
 - [response-critic](plugins/response-critic/) **1.7.0** — Jev-controlled optional pre-delivery verification, high/max reasoning, persistent provider failure circuits, internal-notification guards and verified-note acknowledgments. Judge chain: Kimi → OpenRouter Muse Spark Contributor at the requested effort.
 - [scenario-router](plugins/scenario-router/) **0.5.0** — outcome-only Jev reviewer, independent judge-needed/effort decisions, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
 - [reasoning-shadow](plugins/reasoning-shadow/) **0.1.0** — independent passive main-effort predictor, private causal SQLite/FTS5 request pool and offline metadata report/import/annotation CLI. Defaults off; enabling shadow never changes main reasoning. See [shadow engine](docs/shadow-engine.md).
+
+**Retired on 2026-10-02 at the owner's request.** All three plugins are explicitly disabled on this Mac and on `kuzin`. The gateway and remote desktop backend were restarted to unload existing registrations; a live gateway inspection returned no active registrations for these plugins. Sources, installed server copies, and private example/history stores are preserved. OpenRouter credentials and provider configuration are unchanged. Do not enable these archived plugins for normal operation; app-specific Jev classification is independent of them.
 
 ## App
 
@@ -14,7 +16,7 @@ A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 Build/install instructions: [`hermesapp/ios/README.md`](hermesapp/ios/README.md). Run the app's development commands from `hermesapp/`.
 
-## Execution contract
+## Archived execution contract
 
 **The full agent always runs first.** No incoming classifier call, deterministic pre-run scenario router or fast-path skipped agent turn. Jev reviews the completed draft and supplied redacted execution evidence.
 
@@ -24,9 +26,11 @@ Post-run review cannot authorize or undo an already-executed external action. Ex
 
 See [design and validation](docs/design.md), [current active-review checks](docs/active-review.md), and the separate [future main-reasoning/request-pool design](docs/main-reasoning-pool.md).
 
-## Installation
+## Historical installation — do not activate
 
 Copy either independent plugin directory into the **active profile's** `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`). Back up any existing version before replacing it. The repo root is a collection, not a single plugin manifest.
+
+The commands below document the retired implementation, not recommended deployment. Keep `reasoning-shadow`, `response-critic`, and `scenario-router` in `plugins.disabled`; copying or retaining their files does not enable them.
 
 Runtime dependency: `httpx`. Keys stay outside git in the Hermes environment: `OPENROUTER_API_KEY` for Jev/OpenRouter and `KIMI_API_KEY` or `KIMI_CODING_API_KEY` for Kimi.
 

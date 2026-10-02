@@ -1,5 +1,7 @@
 # Scenario router v0.5.0: outcome-only Jev judge policy
 
+**Retired on 2026-10-02.** Explicitly disabled locally and on `kuzin`; code and private state are preserved for reference. The configuration and commands below describe the archived implementation, not recommended activation. App speech-language classification does not depend on this plugin.
+
 The agent **always runs normally first**, including its own memory storage and
 readback. Jev then judges the outcome. There is no incoming scenario classifier,
 pre-run deterministic scenario policy, skipped agent run, or initial Jev request.

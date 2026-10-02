@@ -1,5 +1,7 @@
 # reasoning-shadow
 
+**Retired on 2026-10-02.** Explicitly disabled locally and on `kuzin`; code and private example stores are preserved for reference. The configuration and commands below describe the archived implementation, not recommended activation.
+
 Independent, **passive** main-agent reasoning calibration. Defaults to `off`;
 `shadow` is the only other mode. It does not change main effort, provider,
 reviewers, tools, delivery, system/user prompts or agent execution. All lifecycle

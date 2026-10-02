@@ -1,5 +1,7 @@
 # Response Critic
 
+**Retired on 2026-10-02.** Explicitly disabled locally and on `kuzin`; code and private state are preserved for reference. The installation and activation instructions below are historical; do not enable this plugin for normal operation.
+
 A standalone Hermes plugin for bounded, pre-delivery verification. Install under
 `$HERMES_HOME/plugins/response-critic/` and enable through `plugins.enabled`.
 It does not replace Hermes source, agent models, tool permissions, or gateway send methods.
