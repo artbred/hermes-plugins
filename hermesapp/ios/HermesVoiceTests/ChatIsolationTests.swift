@@ -6,6 +6,146 @@ import Testing
 @MainActor
 @Suite("Independent chats")
 struct ChatIsolationTests {
+    @Test("Refresh updates an existing shared transcript without losing voice metadata or duplicating turns")
+    func sharedTranscriptRefresh() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = StubServer { request in
+            switch request.path {
+            case "/api/sessions":
+                return .json(200, #"{"data":[{"id":"shared","title":"Shared conversation","last_active":1700000004}],"has_more":false}"#)
+            case "/api/sessions/shared/messages":
+                return .json(200, #"{"data":[{"id":1,"role":"user","content":"Phone question","timestamp":1700000001},{"id":2,"role":"assistant","content":"Phone answer","timestamp":1700000002},{"id":3,"role":"user","content":"Desktop follow-up","timestamp":1700000003},{"id":4,"role":"assistant","content":"Shared answer","timestamp":1700000004}]}"#)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let user = ChatMessage(role: .user, input: .voice, text: "Phone question", stage: .completed, runID: "phone-run", audioFileName: "take.m4a")
+        let reply = ChatMessage(role: .assistant, input: .voice, text: "Phone answer", stage: .completed, runID: "phone-run", audioFileName: "reply.mp3", replyTo: user.id)
+        let store = ChatStore(directory: directory)
+        let chat = Chat(sessionID: "shared", messages: [user, reply], titleGenerated: true)
+        try store.save(chat)
+        let model = AppModel(store: store, client: server.client())
+        await model.refreshChats()
+        await model.refreshChats()
+        let saved = try #require(store.chat(id: chat.id))
+        #expect(saved.messages.map(\.text) == ["Phone question", "Phone answer", "Desktop follow-up", "Shared answer"])
+        #expect(saved.messages.prefix(2).map(\.id) == [user.id, reply.id])
+        #expect(saved.messages.prefix(2).map(\.audioFileName) == ["take.m4a", "reply.mp3"])
+        #expect(saved.messages[1].replyTo == user.id)
+        #expect(saved.title == "Shared conversation")
+        #expect(ChatStore(directory: directory).chat(id: chat.id) == saved)
+    }
+
+    @Test("An in-flight history read cannot overwrite a new local turn")
+    func sharedRefreshRechecksTranscript() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let history = DeferredStubResponse()
+        let status = DeferredStubResponse()
+        let server = StubServer { request in
+            switch request.path {
+            case "/api/sessions":
+                return .json(200, #"{"data":[{"id":"shared"}],"has_more":false}"#)
+            case "/api/sessions/shared/messages": return .deferred(history)
+            case "/v1/runs/pending": return .deferred(status)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        var chat = Chat(sessionID: "shared", messages: [ChatMessage(id: "remote-shared-1", role: .user, text: "Earlier", stage: .completed)], titleGenerated: true)
+        try store.save(chat)
+        let model = AppModel(store: store, client: server.client())
+        let refresh = Task { await model.refreshChats() }
+        try #require(await eventually { server.requests.contains { $0.path == "/api/sessions/shared/messages" } })
+        chat.messages.append(ChatMessage(role: .user, text: "Unfinished local turn", stage: .running, runID: "pending"))
+        try store.save(chat)
+        history.resolve(.json(200, #"{"data":[{"id":1,"role":"user","content":"Earlier"},{"id":2,"role":"assistant","content":"Remote snapshot"}]}"#))
+        await refresh.value
+        #expect(store.chat(id: chat.id)?.messages == chat.messages)
+        status.resolve(.json(200, #"{"run_id":"pending","status":"completed","session_id":"shared","output":"Local result"}"#))
+        try #require(await eventually { store.chat(id: chat.id)?.messages.last?.text == "Local result" })
+    }
+
+    @Test("Compression refresh keeps one owner and cannot resurrect a hidden ancestor", arguments: [(false, false), (true, false), (true, true)])
+    func sharedCompressionLineage(hidden: Bool, knownRoot: Bool) async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = StubServer { request in
+            switch request.path {
+            case "/api/sessions":
+                return .json(200, #"{"data":[{"id":"tip","_lineage_root_id":"root","title":"Shared"}],"has_more":false}"#)
+            case "/api/sessions/tip/messages":
+                let ancestor = knownRoot ? "root" : "middle"
+                return .json(200, "{\"session_id\":\"tip\",\"data\":[{\"id\":1,\"session_id\":\"\(ancestor)\",\"role\":\"user\",\"content\":\"Earlier\"},{\"id\":2,\"session_id\":\"tip\",\"role\":\"assistant\",\"content\":\"Later\"}]}")
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        let chat = Chat(id: "middle", sessionID: "middle", sessionRootID: knownRoot ? "root" : nil, messages: [ChatMessage(id: "remote-middle-1", role: .user, text: "Earlier", stage: .completed)], titleGenerated: true)
+        try store.save(chat)
+        if hidden { try store.remove(id: chat.id) }
+        let model = AppModel(store: store, client: server.client())
+        await model.refreshChats()
+        await model.refreshChats()
+        if hidden {
+            #expect(store.chats.isEmpty)
+        } else {
+            #expect(store.chats.map(\.id) == [chat.id])
+            let saved = try #require(store.chat(id: chat.id))
+            #expect(saved.sessionID == "tip")
+            #expect(saved.sessionRootID == "root")
+            #expect(saved.messages.map(\.text) == ["Earlier", "Later"])
+            #expect(saved.messages.first?.id == "remote-middle-1")
+        }
+    }
+
+    @Test("A failed shared-title write survives relaunch and retries without regenerating the title")
+    func sharedTitleRetry() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fail = Mutex(true)
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("GET", "/api/sessions/root/messages"):
+                return .json(200, #"{"session_id":"tip","data":[]}"#)
+            case ("PATCH", "/api/sessions/tip"):
+                return fail.withLock { $0 }
+                    ? .json(503, #"{"error":{"message":"Temporarily unavailable"}}"#)
+                    : .json(200, #"{"session":{"id":"tip","title":"A shared title"}}"#)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        let chat = Chat(title: "A shared title", sessionID: "root", messages: [ChatMessage(role: .user, text: "Original", stage: .completed)], titleGenerated: true, titleNeedsPublishing: true)
+        try store.save(chat)
+        let model = AppModel(store: store, client: server.client())
+        model.scenePhaseChanged(.active)
+        try #require(await eventually { model.connectionMessage != nil })
+        #expect(store.chat(id: chat.id)?.titleNeedsPublishing == true)
+        let restored = ChatStore(directory: directory)
+        fail.withLock { $0 = false }
+        let relaunched = AppModel(store: restored, client: server.client())
+        relaunched.scenePhaseChanged(.active)
+        try #require(await eventually { restored.chat(id: chat.id)?.titleNeedsPublishing != true })
+        #expect(restored.chat(id: chat.id)?.title == "A shared title")
+        #expect(server.requests.filter { $0.path == "/api/voice/title" }.isEmpty)
+    }
+
+    @Test("Stable server IDs preserve repeated turns and invalidate only changed reply audio")
+    func sharedStableRows() throws {
+        let remote = try JSONDecoder().decode([RemoteMessage].self, from: Data(#"[{"id":1,"role":"user","content":"Repeat"},{"id":2,"role":"assistant","content":"Edited reply"},{"id":3,"role":"user","content":"Repeat"},{"id":4,"role":"assistant","content":"Second reply"}]"#.utf8))
+        let first = ChatMessage(role: .user, input: .voice, text: "Repeat", stage: .completed, runID: "one", remoteMessageID: "1", audioFileName: "first.m4a")
+        let reply = ChatMessage(role: .assistant, text: "Old reply", stage: .completed, remoteMessageID: "2", audioFileName: "old.mp3")
+        let second = ChatMessage(role: .user, text: "Repeat", stage: .completed, runID: "two")
+        var chat = Chat(sessionID: "shared", messages: [first, reply, second])
+        chat.mergeHistory(remote, sessionID: "shared")
+        chat.mergeHistory(remote, sessionID: "shared")
+        #expect(chat.messages.map(\.text) == ["Repeat", "Edited reply", "Repeat", "Second reply"])
+        #expect(chat.messages.prefix(3).map(\.id) == [first.id, reply.id, second.id])
+        #expect(chat.messages[0].audioFileName == "first.m4a")
+        #expect(chat.messages[1].audioFileName == nil)
+    }
+
     @Test("An attachment import in A cannot prevent sending in B", arguments: [false, true])
     func importDoesNotBlockAnotherChat(fails: Bool) async throws {
         let directory = makeTemporaryDirectory()

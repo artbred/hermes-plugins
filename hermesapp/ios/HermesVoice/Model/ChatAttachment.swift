@@ -14,6 +14,7 @@ struct RunSubmission: Codable, Equatable, Sendable {
     var input: String
     var sessionID: String?
     var instructions: String?
+    var sessionKey: String?
 }
 
 /// Copies a Files-provider item into app-owned storage while its security scope is held.

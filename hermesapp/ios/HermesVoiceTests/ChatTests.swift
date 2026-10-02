@@ -19,6 +19,48 @@ struct ChatTests {
         #expect(try Data(contentsOf: restored.audioURL(fileName: "recording.m4a")) == Data([1, 2, 3]))
     }
 
+    @Test("Legacy imports gain notification-safe local IDs without replaying an uncertain turn under a new key")
+    func legacyImportedIdentity() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let older = ChatMessage(id: "remote-native-session-8", role: .user, text: "Earlier", stage: .completed)
+        let pending = ChatMessage(role: .user, text: "Resume safely", stage: .submitting, audioFileName: "original.m4a",
+                                  submission: RunSubmission(input: "Resume safely", sessionID: "native-session"))
+        let store = ChatStore(directory: directory)
+        try Data([1, 2, 3]).write(to: store.audioURL(fileName: "original.m4a"))
+        try store.save(Chat(id: "native-session", sessionID: "native-session", messages: [older, pending], titleGenerated: true))
+        let restored = ChatStore(directory: directory)
+        let migrated = try #require(restored.chats.first)
+        try #require(UUID(uuidString: migrated.id) != nil)
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("POST", "/v1/runs"):
+                guard request.request.value(forHTTPHeaderField: "X-Hermes-Session-Key") == "ios-chat:native-session",
+                      request.request.value(forHTTPHeaderField: "Idempotency-Key") == pending.requestKey else {
+                    return .json(409, #"{"error":{"message":"Original admission identity changed"}}"#)
+                }
+                return .json(202, #"{"run_id":"recovered","status":"started"}"#)
+            case ("GET", "/v1/runs/recovered"):
+                return .json(200, #"{"run_id":"recovered","status":"completed","session_id":"native-session","output":"Recovered"}"#)
+            case ("GET", "/api/sessions"):
+                return .json(200, #"{"data":[{"id":"native-session"}],"has_more":false}"#)
+            case ("GET", "/api/sessions/native-session/messages"):
+                return .json(200, #"{"session_id":"native-session","data":[{"id":8,"role":"user","content":"Earlier"},{"id":9,"role":"user","content":"Resume safely"},{"id":10,"role":"assistant","content":"Recovered"}]}"#)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let model = AppModel(store: restored, client: server.client())
+        model.scenePhaseChanged(.active)
+        try #require(await eventually { restored.chat(id: migrated.id)?.messages.last?.text == "Recovered" })
+        await model.refreshChats()
+        let saved = try #require(restored.chat(id: migrated.id))
+        #expect(saved.messages.map(\.text) == ["Earlier", "Resume safely", "Recovered"])
+        #expect(saved.messages.prefix(2).map(\.id) == [older.id, pending.id])
+        #expect(saved.messages[1].stage == .completed)
+        #expect(try Data(contentsOf: restored.audioURL(fileName: "original.m4a")) == Data([1, 2, 3]))
+        #expect(ChatStore(directory: directory).chats.map(\.id) == [migrated.id])
+    }
+
     @Test("Unreadable history is preserved rather than replaced")
     func unreadableHistory() throws {
         let directory = makeTemporaryDirectory()
@@ -64,6 +106,10 @@ struct ChatTests {
                 return .json(202, #"{"run_id":"run-policy","status":"queued"}"#)
             case ("GET", "/v1/runs/run-policy"):
                 return .json(200, #"{"run_id":"run-policy","status":"completed","session_id":"session-policy","output":"Twelve."}"#)
+            case ("GET", "/api/sessions/session-policy/messages"):
+                return .json(200, #"{"session_id":"session-policy","data":[]}"#)
+            case ("PATCH", "/api/sessions/session-policy"):
+                return .json(200, #"{"session":{"id":"session-policy","title":"Simple addition"}}"#)
             case ("POST", "/api/audio/speak"):
                 return .json(200, "{\"ok\":true,\"data_url\":\"data:audio/wav;base64,\(audio)\",\"mime_type\":\"audio/wav\"}")
             default: return .json(404, #"{"detail":"Not found"}"#)
@@ -82,6 +128,8 @@ struct ChatTests {
         #expect(reply.text == "Twelve.")
         #expect(store.chat(id: chat.id)?.sessionID == "session-policy")
         #expect(store.chat(id: chat.id)?.messages.first?.stage == .completed)
+        #expect(await eventually { store.chat(id: chat.id)?.titleGenerated == true && store.chat(id: chat.id)?.titleNeedsPublishing != true })
+        #expect(store.chat(id: chat.id)?.title == "Simple addition")
         if input == .voice {
             #expect(await eventually { store.chat(id: chat.id)?.messages.last?.audioFileName != nil })
             #expect(server.requests.filter { $0.path == "/api/audio/speak" }.count == 1)

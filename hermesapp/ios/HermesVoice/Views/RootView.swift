@@ -122,6 +122,9 @@ struct RootView: View {
         }
         .onOpenURL { model.handle($0) }
         .onChange(of: scenePhase, initial: true) { _, phase in model.scenePhaseChanged(phase) }
+        .task(id: scenePhase) {
+            if scenePhase == .active { await model.synchronizeChats() }
+        }
     }
 
     private var menuAnimation: Animation? {

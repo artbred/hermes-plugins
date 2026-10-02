@@ -60,13 +60,17 @@ struct RemoteSession: Decodable, Sendable {
     var id: String
     var title: String?
     var updatedAt: Date?
+    var lineageRootID: String?
 
-    enum CodingKeys: String, CodingKey { case id, title, lastActive = "last_active", startedAt = "started_at" }
+    enum CodingKeys: String, CodingKey {
+        case id, title, lastActive = "last_active", startedAt = "started_at", lineageRootID = "_lineage_root_id"
+    }
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
         title = try values.decodeIfPresent(String.self, forKey: .title)
+        lineageRootID = try values.decodeIfPresent(String.self, forKey: .lineageRootID)
         updatedAt = try values.decodeIfPresent(NativeDate.self, forKey: .lastActive)?.value
             ?? values.decodeIfPresent(NativeDate.self, forKey: .startedAt)?.value
     }
@@ -77,8 +81,9 @@ struct RemoteMessage: Decodable, Sendable {
     var role: String
     var text: String
     var createdAt: Date?
+    var sessionID: String?
 
-    enum CodingKeys: String, CodingKey { case id, role, content, timestamp }
+    enum CodingKeys: String, CodingKey { case id, role, content, timestamp, sessionID = "session_id" }
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -88,6 +93,7 @@ struct RemoteMessage: Decodable, Sendable {
             id = try values.decode(String.self, forKey: .id)
         }
         role = try values.decode(String.self, forKey: .role)
+        sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID)
         if let string = try? values.decode(String.self, forKey: .content) {
             text = string
         } else {
@@ -98,6 +104,12 @@ struct RemoteMessage: Decodable, Sendable {
         }
         createdAt = try values.decodeIfPresent(NativeDate.self, forKey: .timestamp)?.value
     }
+}
+
+struct RemoteHistory: Sendable {
+    var sessionID: String
+    var messages: [RemoteMessage]
+    var sessionIDs: Set<String>
 }
 
 private struct NativeDate: Decodable {
@@ -385,17 +397,34 @@ struct APIClient: Sendable {
         struct Page: Decodable { var data: [RemoteSession]; var has_more: Bool }
         var result: [RemoteSession] = []
         var seen = Set<String>()
-        var offset = 0
-        while true {
-            let page: Page = try await get(["api", "sessions"], query: [
-                URLQueryItem(name: "source", value: "api_server"),
-                URLQueryItem(name: "limit", value: "200"), URLQueryItem(name: "offset", value: String(offset))
-            ])
-            for session in page.data where seen.insert(session.id).inserted { result.append(session) }
-            if !page.has_more { return result }
-            offset += 200
-            guard offset <= 1_000_000 else { throw APIError.invalidResponse("Session pagination did not end.") }
+        // Source is provenance, not a separate account. Keep internal workers and
+        // messaging-platform conversations out of this shared interactive history.
+        for source in ["api_server", "desktop", "cli"] {
+            var offset = 0
+            while true {
+                let page: Page = try await get(["api", "sessions"], query: [
+                    URLQueryItem(name: "source", value: source),
+                    URLQueryItem(name: "limit", value: "200"), URLQueryItem(name: "offset", value: String(offset))
+                ])
+                for session in page.data where seen.insert(session.id).inserted { result.append(session) }
+                if !page.has_more { break }
+                offset += 200
+                guard offset <= 1_000_000 else { throw APIError.invalidResponse("Session pagination did not end.") }
+            }
         }
+        return result.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+    }
+
+    func setSessionTitle(sessionID: String, title: String) async throws -> String {
+        struct Body: Encodable { var title: String }
+        struct Receipt: Decodable { var session: RemoteSession }
+        var request = try request(["api", "sessions", sessionID], method: "PATCH")
+        request.httpBody = try JSONEncoder().encode(Body(title: title))
+        let receipt = try Self.decode(Receipt.self, from: await send(request))
+        guard receipt.session.id == sessionID, let saved = receipt.session.title, !saved.isEmpty else {
+            throw APIError.invalidResponse("Hermes did not save the shared chat title.")
+        }
+        return saved
     }
 
 
@@ -518,20 +547,33 @@ struct APIClient: Sendable {
         return title
     }
 
-    func messages(sessionID: String) async throws -> [RemoteMessage] {
-        struct Page: Decodable { var data: [RemoteMessage] }
+    func messages(sessionID: String) async throws -> RemoteHistory {
+        struct Page: Decodable { var session_id: String?; var data: [RemoteMessage] }
         var result: [RemoteMessage] = []
         var seen = Set<String>()
         var offset = 0
+        var resolvedID = sessionID
+        var sessionIDs: Set<String> = [sessionID]
         while true {
             let page: Page = try await get(["api", "sessions", sessionID, "messages"], query: [
                 URLQueryItem(name: "limit", value: "500"), URLQueryItem(name: "offset", value: String(offset)),
-                URLQueryItem(name: "order", value: "oldest")
+                URLQueryItem(name: "order", value: "oldest"), URLQueryItem(name: "include_compacted", value: "true")
             ])
+            // A rotation between pages can change both the alias and offsets.
+            // Restart that snapshot rather than splicing two different histories.
+            if let tip = page.session_id, tip != resolvedID {
+                resolvedID = tip
+                result.removeAll(keepingCapacity: true)
+                seen.removeAll(keepingCapacity: true)
+                offset = 0
+                sessionIDs.insert(tip)
+                continue
+            }
+            sessionIDs.formUnion(page.data.compactMap(\.sessionID))
             for message in page.data where ["user", "assistant"].contains(message.role)
                 && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && seen.insert(message.id).inserted { result.append(message) }
-            if page.data.count < 500 { return result }
+            if page.data.count < 500 { return RemoteHistory(sessionID: resolvedID, messages: result, sessionIDs: sessionIDs) }
             offset += page.data.count
         }
     }

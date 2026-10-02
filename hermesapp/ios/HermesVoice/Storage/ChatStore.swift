@@ -28,6 +28,24 @@ final class ChatStore {
                 guard index.version == 1 else { throw StoreError.unsupportedVersion }
                 chats = index.chats.sorted { $0.updatedAt > $1.updatedAt }
                 hiddenSessionIDs = index.hiddenSessionIDs
+                var migrated = chats
+                for index in migrated.indices where UUID(uuidString: migrated[index].id) == nil {
+                    let previousID = migrated[index].id
+                    migrated[index].id = UUID().uuidString.lowercased()
+                    let prefix = "remote-\(previousID)-"
+                    for messageIndex in migrated[index].messages.indices {
+                        if migrated[index].messages[messageIndex].submission != nil,
+                           migrated[index].messages[messageIndex].submission?.sessionKey == nil {
+                            migrated[index].messages[messageIndex].submission?.sessionKey = "ios-chat:\(previousID)"
+                        }
+                        if migrated[index].messages[messageIndex].remoteMessageID == nil,
+                           migrated[index].messages[messageIndex].id.hasPrefix(prefix) {
+                            migrated[index].messages[messageIndex].remoteMessageID =
+                                String(migrated[index].messages[messageIndex].id.dropFirst(prefix.count))
+                        }
+                    }
+                }
+                if migrated != chats { try commit(migrated, hidden: hiddenSessionIDs) }
             }
         } catch {
             self.error = error.localizedDescription
@@ -60,6 +78,7 @@ final class ChatStore {
         guard let chat = chat(id: id) else { return }
         var hidden = hiddenSessionIDs
         if let sessionID = chat.sessionID { hidden.insert(sessionID) }
+        if let root = chat.sessionRootID { hidden.insert(root) }
         try commit(chats.filter { $0.id != id }, hidden: hidden)
         for message in chat.messages {
             if let fileName = message.audioFileName {

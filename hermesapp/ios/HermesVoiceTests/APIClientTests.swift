@@ -107,16 +107,22 @@ struct APIClientTests {
               {"id":15,"role":"assistant","content":"   "}
             ]}
             """) }
-        let messages = try await server.client().messages(sessionID: "session")
+        let messages = try await server.client().messages(sessionID: "session").messages
         #expect(messages.map(\.id) == ["11", "14"])
         #expect(messages.map(\.text) == ["Describe this", "Visible answer\nSecond paragraph"])
         #expect(messages.map(\.createdAt) == [Date(timeIntervalSince1970: 1700000001), Date(timeIntervalSince1970: 1700000002)])
     }
 
-    @Test("Session pagination avoids duplicate backfilled pins and excludes other platforms")
+    @Test("Shared history includes desktop and CLI sessions without importing messaging platforms")
     func sessionPagination() async throws {
         let server = StubServer { request in
             let query = URLComponents(url: request.request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if query.contains(URLQueryItem(name: "source", value: "desktop")) {
+                return .json(200, #"{"data":[{"id":"desktop"}],"has_more":false}"#)
+            }
+            if query.contains(URLQueryItem(name: "source", value: "cli")) {
+                return .json(200, #"{"data":[{"id":"cli"}],"has_more":false}"#)
+            }
             guard query.contains(URLQueryItem(name: "source", value: "api_server")) else {
                 return .json(200, #"{"data":[{"id":"telegram-private"}],"has_more":false}"#)
             }
@@ -125,7 +131,7 @@ struct APIClientTests {
             }
             return .json(200, #"{"data":[{"id":"older"},{"id":"pinned","title":"Pinned"}],"has_more":false}"#)
         }
-        #expect(try await server.client().sessions().map(\.id) == ["pinned", "recent", "older"])
+        #expect(Set(try await server.client().sessions().map(\.id)) == ["pinned", "recent", "older", "desktop", "cli"])
     }
 
     @Test("SSE supports CRLF, multiline data, Unicode, comments, and exact approval IDs")

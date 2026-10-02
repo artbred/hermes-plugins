@@ -557,19 +557,24 @@ final class AppModel {
                     try updateMessage(chatID, message.id) { $0.attachments = message.attachments }
                 }
                 guard let chat = store.chat(id: chatID) else { throw CancellationError() }
-                message.submission = RunSubmission(input: try message.agentInput(), sessionID: chat.sessionID, instructions: MobileResponseFormat.instructions)
+                message.submission = RunSubmission(input: try message.agentInput(), sessionID: chat.sessionID,
+                                                   instructions: MobileResponseFormat.instructions, sessionKey: chat.sessionKey)
                 try updateMessage(chatID, message.id) { $0.submission = message.submission }
             }
             guard let chat = store.chat(id: chatID) else { throw CancellationError() }
             try updateMessage(chatID, message.id) { $0.stage = .submitting; $0.error = nil }
             guard let submission = message.submission else { throw CancellationError() }
-            let push = try await notifications?.destination(chatID: chatID, client: client)
+            let sessionKey = submission.sessionKey ?? chat.sessionKey
+            // Legacy imported attempts predate UUID local IDs and could not register
+            // push destinations. Recover their original fingerprint without adding one.
+            let push = sessionKey == chat.sessionKey
+                ? try await notifications?.destination(chatID: chatID, client: client) : nil
             try checkWorker(chatID, workerID)
             if push != nil {
                 message.replyNotificationRequested = true
                 try updateMessage(chatID, message.id) { $0.replyNotificationRequested = true }
             }
-            let receipt = try await client.startRun(text: submission.input, sessionKey: chat.sessionKey, sessionID: submission.sessionID, idempotencyKey: message.requestKey, push: push, instructions: submission.instructions)
+            let receipt = try await client.startRun(text: submission.input, sessionKey: sessionKey, sessionID: submission.sessionID, idempotencyKey: message.requestKey, push: push, instructions: submission.instructions)
             // Never let an old cancelled callback overwrite a replacement worker. The
             // persisted submission lets that worker recover this same run idempotently.
             guard workerIDs[chatID] == workerID else { throw CancellationError() }
@@ -603,7 +608,10 @@ final class AppModel {
             let run = try await client.run(id: runID)
             try checkWorker(chatID, workerID)
             if let sessionID = run.sessionID, store.chat(id: chatID)?.sessionID != sessionID {
-                try updateChat(chatID) { $0.sessionID = sessionID }
+                try updateChat(chatID) {
+                    if $0.sessionRootID == nil { $0.sessionRootID = $0.sessionID ?? sessionID }
+                    $0.sessionID = sessionID
+                }
             }
             if let request = run.approval { receive(request, runID: runID, chatID: chatID, workerID: workerID) }
             if run.isTerminal {
@@ -754,31 +762,62 @@ final class AppModel {
         defer { isRefreshing = false }
         do {
             let sessions = try await client.sessions()
-            for session in sessions where !store.hiddenSessionIDs.contains(session.id) {
-                // Existing app conversations retain local audio/input metadata. Native session IDs
-                // are kept for continuing their server-owned history, including after compression.
-                guard !ownsSession(session.id) else { continue }
-                let messages = try await client.messages(sessionID: session.id)
-                // A poll or deletion may have claimed/hidden this session during download.
-                guard !store.hiddenSessionIDs.contains(session.id), !ownsSession(session.id) else { continue }
-                let visible = messages.compactMap { remote -> ChatMessage? in
-                    guard let role = MessageRole(rawValue: remote.role), !remote.text.isEmpty else { return nil }
-                    return ChatMessage(id: "remote-\(session.id)-\(remote.id)", role: role, text: remote.text, createdAt: remote.createdAt ?? .now, stage: .completed)
+            for session in sessions {
+                var aliases: Set<String> = [session.id, session.lineageRootID ?? session.id]
+                guard aliases.isDisjoint(with: store.hiddenSessionIDs) else { continue }
+                let before = store.chats
+                let known = owner(in: before, sessionIDs: aliases)
+                guard known?.hasPendingMessages != true,
+                      known.map({ titleTasks[$0.id] == nil }) ?? true else { continue }
+                let history = try await client.messages(sessionID: session.id)
+                try Task.checkCancellation()
+                aliases.formUnion(history.sessionIDs)
+                // Row session IDs recover old phone records saved against a middle
+                // compression segment before root identity was stored locally.
+                let original = owner(in: before, sessionIDs: aliases)
+                let latest = owner(in: store.chats, sessionIDs: aliases)
+                guard aliases.isDisjoint(with: store.hiddenSessionIDs),
+                      latest?.id == original?.id, latest?.messages == original?.messages,
+                      latest?.hasPendingMessages != true,
+                      latest.map({ titleTasks[$0.id] == nil }) ?? true else { continue }
+                var chat = latest ?? Chat(title: session.title ?? "Untitled chat",
+                                         createdAt: history.messages.first?.createdAt ?? .now,
+                                         updatedAt: session.updatedAt ?? .now,
+                                         titleGenerated: session.title == nil ? nil : true)
+                chat.sessionRootID = session.lineageRootID ?? chat.sessionRootID ?? chat.sessionID ?? session.id
+                chat.sessionID = history.sessionID
+                chat.mergeHistory(history.messages, sessionID: session.id)
+                guard !chat.messages.isEmpty else { continue }
+                if let title = session.title, !title.isEmpty,
+                   chat.titleNeedsPublishing != true, chat.titleGenerated == true {
+                    chat.title = title
                 }
-                guard !visible.isEmpty else { continue }
-                let chat = Chat(id: session.id, title: session.title ?? "Untitled chat", createdAt: visible.first?.createdAt ?? .now, updatedAt: session.updatedAt ?? visible.last?.createdAt ?? .now, sessionID: session.id, messages: visible, titleGenerated: session.title == nil ? nil : true)
-                try store.save(chat)
+                if let updatedAt = session.updatedAt { chat.updatedAt = updatedAt }
+                if chat != latest { try store.save(chat) }
             }
             connectionMessage = nil
-        } catch { connectionMessage = error.localizedDescription }
+        } catch {
+            if !Task.isCancelled { connectionMessage = error.localizedDescription }
+        }
         resumePending()
     }
 
-    private func ownsSession(_ sessionID: String) -> Bool {
-        store.chats.contains { chat in
-            chat.sessionID == sessionID || chat.id == sessionID
+    private func owner(in chats: [Chat], sessionIDs: Set<String>) -> Chat? {
+        chats.first { chat in
+            sessionIDs.contains(chat.id)
+                || chat.sessionID.map(sessionIDs.contains) == true
+                || chat.sessionRootID.map(sessionIDs.contains) == true
                 // A fresh native session can become visible before its first status reaches us.
-                || chat.messages.contains { $0.role == .user && $0.runID == sessionID }
+                || chat.messages.contains { $0.role == .user && $0.runID.map(sessionIDs.contains) == true }
+        }
+    }
+
+    /// Owned by RootView's foreground task; SwiftUI cancels it on suspension.
+    func synchronizeChats() async {
+        while !Task.isCancelled {
+            await refreshChats()
+            do { try await Task.sleep(for: .seconds(15)) }
+            catch { return }
         }
     }
 
@@ -894,24 +933,36 @@ final class AppModel {
 
     private func scheduleTitle(_ chatID: String) {
         guard titleTasks[chatID] == nil, let client = makeClient(),
-              let chat = store.chat(id: chatID), chat.titleGenerated != true,
+              let chat = store.chat(id: chatID), chat.titleGenerated != true || chat.titleNeedsPublishing == true,
               chat.messages.contains(where: { $0.role == .user && $0.stage == .completed })
         else { return }
         titleTasks[chatID] = Task { [weak self] in
             guard let self else { return }
             defer { titleTasks[chatID] = nil }
             do {
-                let completed = chat.messages.filter { $0.stage == .completed }.prefix(2)
-                let exchange = await Task.detached(priority: .userInitiated) {
-                    completed.map { RecordingContextMessage(role: $0.role.rawValue, text: $0.text.isEmpty ? $0.files.map(\.name).joined(separator: ", ") : ($0.role == .assistant ? ResponseContent(raw: $0.text).plainText : $0.text)) }
-                }.value
+                if chat.titleGenerated != true {
+                    let completed = chat.messages.filter { $0.stage == .completed }.prefix(2)
+                    let exchange = await Task.detached(priority: .userInitiated) {
+                        completed.map { RecordingContextMessage(role: $0.role.rawValue, text: $0.text.isEmpty ? $0.files.map(\.name).joined(separator: ", ") : ($0.role == .assistant ? ResponseContent(raw: $0.text).plainText : $0.text)) }
+                    }.value
+                    try Task.checkCancellation()
+                    let title = try await client.generateTitle(messages: exchange)
+                    try Task.checkCancellation()
+                    guard var latest = store.chat(id: chatID) else { return }
+                    latest.title = title
+                    latest.titleGenerated = true
+                    latest.titleNeedsPublishing = latest.sessionID == nil ? nil : true
+                    try store.save(latest)
+                }
+                guard let latest = store.chat(id: chatID), latest.titleNeedsPublishing == true,
+                      let sessionID = latest.sessionID else { return }
+                let history = try await client.messages(sessionID: sessionID)
+                let savedTitle = try await client.setSessionTitle(sessionID: history.sessionID, title: latest.title)
                 try Task.checkCancellation()
-                let title = try await client.generateTitle(messages: exchange)
-                try Task.checkCancellation()
-                guard !title.isEmpty, var latest = store.chat(id: chatID) else { return }
-                latest.title = title
-                latest.titleGenerated = true
-                try store.save(latest)
+                guard var saved = store.chat(id: chatID) else { return }
+                saved.title = savedTitle
+                saved.titleNeedsPublishing = nil
+                try store.save(saved)
             } catch {
                 if !Task.isCancelled, selectedChatID == chatID {
                     connectionMessage = "Could not generate the chat title: \(error.localizedDescription)"

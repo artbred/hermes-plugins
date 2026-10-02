@@ -38,6 +38,30 @@ Open Settings from the left menu; it uses native push/back navigation, not a bot
 
 The deployment uses `https://hermes.sashakuzina.com` and `API_SERVER_KEY` from `~/.hermes/.env` on `kuzin`. Every app request uses that Bearer token. Dashboard and provider credentials remain on the server behind authenticated, narrowly scoped proxy routes.
 
+### Shared desktop, phone, and terminal sessions
+
+`kuzin`, default profile, owns the canonical `/root/.hermes/state.db`. The desktop's existing SSH tunnel (`http://127.0.0.1:19119` → `kuzin:127.0.0.1:9119`) and the phone's public HTTPS URL reach that same store. They intentionally use different credentials: the desktop's dashboard token stays on the Mac; the phone keeps its scoped native API token in Keychain. Do not point the desktop at the phone-only public endpoint or expose desktop administration routes under the mobile token.
+
+The phone imports `api_server`, `desktop`, and `cli` sessions and periodically refreshes history while active, as well as supporting manual Refresh. It continues the native session ID, follows compression aliases, and includes pre-compression display history. Existing local audio, attachments, drafts, failed attempts, and brain dumps are retained. Shared session titles come from the server; newly generated phone titles are published there and failed publications retry after reopening.
+
+Desktop groups phone-origin sessions under its **API** sidebar section, which may be collapsed; desktop/CLI-origin sessions remain under **Sessions**. This grouping is provenance, not separate storage.
+
+For occasional terminal use, install the explicit launcher without replacing local `hermes`:
+
+```sh
+chmod +x hermesapp/scripts/hermes-shared
+mkdir -p ~/.local/bin
+ln -s "$PWD/hermesapp/scripts/hermes-shared" ~/.local/bin/hermes-shared
+hermes-shared
+hermes-shared --resume <native-session-id>
+hermes-shared sessions list
+```
+
+The launcher requires the existing SSH alias `kuzin`. It runs native Hermes with `HERMES_HOME=/root/.hermes` and `--profile default`, quotes arguments for the remote shell, and allocates a terminal only for interactive stdin. Tools and working directories are on the VPS, not the Mac. Ordinary Mac-local `hermes` remains available but uses a separate store; it is not replicated. Do not override the shared launcher's profile if you want the same sessions as desktop and phone.
+
+Only server-owned conversation history and titles are shared. Recordings, downloaded speech, unsent drafts, attachments' local previews, and silent diary-only chat entries remain device-local; their saved memory still lives in Hindsight. Removing a chat on the phone hides its whole native compression lineage on that phone; it does not delete the server conversation or other clients' copies.
+
+
 ## Hermes configuration
 
 Enable Hermes's native `api_server` platform and set `API_SERVER_KEY`, `API_SERVER_HOST`, and `API_SERVER_PORT` in the Hermes environment. Keep TLS/authentication in front of it. Enable the native dashboard backend for its speech routes, but **do not expose its administrative API** to the phone's public hostname.

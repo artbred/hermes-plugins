@@ -1,0 +1,14 @@
+#!/bin/bash
+# Run native Hermes on kuzin's canonical default profile; leave local hermes alone.
+remote_command='exec /usr/bin/env HERMES_HOME=/root/.hermes /usr/local/bin/hermes --profile default'
+
+# SSH sends one shell command, not an argv array. Quote each argument for that shell.
+for arg in "$@"; do
+    quoted=${arg//\'/\'\\\'\'}
+    remote_command+=" '$quoted'"
+done
+
+if [[ -t 0 ]]; then
+    exec ssh -t kuzin "$remote_command"
+fi
+exec ssh -T kuzin "$remote_command"
