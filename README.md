@@ -1,12 +1,18 @@
 # Hermes Plugins
 
-A shared repository for custom [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugins. Additional independent plugins can be added under `plugins/`.
+A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugins and the Hermes Voice iOS app. Additional independent plugins can be added under `plugins/`.
 
 ## Plugins
 
 - [response-critic](plugins/response-critic/) **1.7.0** — Jev-controlled optional pre-delivery verification, high/max reasoning, persistent provider failure circuits, internal-notification guards and verified-note acknowledgments. Judge chain: Kimi → OpenRouter Muse Spark Contributor at the requested effort.
 - [scenario-router](plugins/scenario-router/) **0.5.0** — outcome-only Jev reviewer, independent judge-needed/effort decisions, public cooperative review tool, shadow observation and labeled replay/live evaluation. Despite its historical name, it does not route incoming tasks or switch models.
 - [reasoning-shadow](plugins/reasoning-shadow/) **0.1.0** — independent passive main-effort predictor, private causal SQLite/FTS5 request pool and offline metadata report/import/annotation CLI. Defaults off; enabling shadow never changes main reasoning. See [shadow engine](docs/shadow-engine.md).
+
+## App
+
+[`hermesapp/`](hermesapp/) contains the Hermes Voice iOS client, its optional APNs notification service, and app-specific documentation. It is a regular directory tracked by this repository, not a submodule.
+
+Build/install instructions: [`hermesapp/ios/README.md`](hermesapp/ios/README.md). Run the app's development commands from `hermesapp/`.
 
 ## Execution contract
 

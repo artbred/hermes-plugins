@@ -1,0 +1,9 @@
+.DS_Store
+.omp/*.lock
+notifications/.venv/
+notifications/__pycache__/
+notifications/.pytest_cache/
+notifications/.ruff_cache/
+*.p8
+watchdog.yaml
+WATCHDOG.yml

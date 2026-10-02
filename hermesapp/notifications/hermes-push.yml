@@ -1,0 +1,15 @@
+http:
+  routers:
+    hermes-push:
+      rule: Host(`hermes.sashakuzina.com`) && Method(`POST`) && (Path(`/v1/runs`) || Path(`/api/push/devices`) || PathRegexp(`^/api/push/runs/[A-Za-z0-9_-]+/ack$`))
+      priority: 300
+      entryPoints:
+        - websecure
+      service: hermes-push
+      tls:
+        certResolver: letsencrypt
+  services:
+    hermes-push:
+      loadBalancer:
+        servers:
+          - url: http://172.23.0.1:9123

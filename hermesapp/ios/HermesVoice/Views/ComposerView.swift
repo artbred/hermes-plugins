@@ -1,0 +1,279 @@
+import SwiftUI
+import QuickLook
+import UniformTypeIdentifiers
+
+struct ComposerView: View {
+    @Bindable var model: AppModel
+    @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var isImporterPresented = false
+    @State private var previewURL: URL?
+
+    private var hasInput: Bool {
+        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !model.pendingAttachments.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if model.recorder.isRecording {
+                recordingControls
+            } else {
+                if !model.pendingAttachments.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 10) {
+                            ForEach(model.pendingAttachments) { attachment in
+                                AttachmentView(
+                                    attachment: attachment,
+                                    preview: {
+                                        focused = false
+                                        previewURL = model.attachmentURL(attachment)
+                                    },
+                                    remove: { model.removeAttachment(attachment.id) }
+                                )
+                                .frame(width: dynamicTypeSize.isAccessibilitySize ? 310 : 250)
+                                .disabled(model.isBusy || model.isImportingAttachments)
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                    .scrollIndicators(.hidden)
+                    .accessibilityIdentifier("draftAttachments")
+                }
+                if model.isImportingAttachments {
+                    ProgressView("Adding files…")
+                        .font(.footnote)
+                        .accessibilityIdentifier("attachmentImportStatus")
+                }
+                if let error = model.attachmentImportError {
+                    Label("Couldn’t add files: \(error)", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("attachmentImportError")
+                }
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 8) {
+                            messageField.padding(.horizontal, 12)
+                            HStack {
+                                attachButton
+                                Spacer()
+                                if model.isBusy {
+                                    stopButton
+                                } else {
+                                    voiceButton
+                                    sendButton
+                                }
+                            }
+                        }
+                    } else {
+                        HStack(alignment: .bottom, spacing: 4) {
+                            attachButton
+                            messageField
+                                .padding(.vertical, 11)
+                            if model.isBusy {
+                                stopButton
+                            } else {
+                                voiceButton
+                                if hasInput { sendButton }
+                            }
+                        }
+                    }
+                }
+                .padding(8)
+                .background(HermesPalette.control(colorScheme), in: RoundedRectangle(cornerRadius: 30))
+            }
+        }
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity)
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                Task { await model.importAttachments(urls) }
+            case .failure(let error):
+                let nsError = error as NSError
+                if nsError.domain != NSCocoaErrorDomain || nsError.code != NSUserCancelledError {
+                    model.alert = AppAlert(title: "Couldn’t add files", message: error.localizedDescription)
+                }
+            }
+        }
+        .quickLookPreview($previewURL)
+        .onChange(of: focused) { _, value in model.isComposerFocused = value }
+        .onDisappear { model.isComposerFocused = false }
+        .onChange(of: model.recorder.isRecording) { _, isRecording in
+            if isRecording {
+                focused = false
+                isImporterPresented = false
+                previewURL = nil
+            }
+        }
+        .onChange(of: model.isChatsPresented) { _, isPresented in
+            if isPresented { focused = false }
+        }
+        .onChange(of: model.isSettingsPresented) { _, isPresented in
+            if isPresented { focused = false }
+        }
+    }
+
+    private var messageField: some View {
+        TextField("Ask Hermes", text: $model.draft, axis: .vertical)
+            .lineLimit(1...(dynamicTypeSize.isAccessibilitySize ? 3 : 6))
+            .focused($focused)
+            .accessibilityLabel("Message Hermes")
+            .accessibilityIdentifier("composerText")
+    }
+
+    private var attachButton: some View {
+        Button {
+            focused = false
+            isImporterPresented = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.title3)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isBusy || model.recorder.isRecording || model.isImportingAttachments)
+        .accessibilityLabel("Attach files")
+        .accessibilityIdentifier("attachFilesButton")
+    }
+
+    private var voiceButton: some View {
+        Button {
+            focused = false
+            Task { await model.startRecording() }
+        } label: {
+            Image(systemName: "mic")
+                .font(.title3)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isBusy || model.isImportingAttachments)
+        .accessibilityLabel("Record voice message")
+        .accessibilityHint("Tap Send to submit your recording. Touch anywhere else in the app to discard it.")
+        .accessibilityIdentifier("recordButton")
+    }
+
+    private var sendButton: some View {
+        Button {
+            focused = false
+            model.sendText(model.draft)
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(model.canSend ? HermesPalette.background(colorScheme) : Color.secondary)
+                .frame(width: 44, height: 44)
+                .background(model.canSend ? Color.primary : Color(uiColor: .tertiarySystemFill), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!model.canSend)
+        .accessibilityLabel("Send message")
+        .accessibilityIdentifier("sendTextButton")
+    }
+
+    private var stopButton: some View {
+        Button { model.stopRun() } label: {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(model.isStopping ? Color.secondary : HermesPalette.background(colorScheme))
+                .frame(width: 44, height: 44)
+                .background(model.isStopping ? Color(uiColor: .tertiarySystemFill) : Color.primary, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isStopping)
+        .keyboardShortcut(".", modifiers: .command)
+        .accessibilityLabel(model.isStopping ? "Stopping request" : "Stop request")
+        .accessibilityValue(model.isStopping ? "Waiting for confirmation" : "")
+        .accessibilityHint(model.isStopping ? "The request has not finished stopping." : "Stops this request. Actions already taken are not undone.")
+        .accessibilityIdentifier("stopRunButton")
+    }
+
+    private var recordingControls: some View {
+        VStack(spacing: 16) {
+            recordingHeaderLayout {
+                Label("Recording", systemImage: "record.circle")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                Text(Duration.seconds(model.recorder.elapsed), format: .time(pattern: .minuteSecond))
+                    .font(.title2.monospacedDigit())
+                    .accessibilityLabel("Recording duration")
+                    .accessibilityValue(Duration.seconds(model.recorder.elapsed).formatted(.time(pattern: .minuteSecond)))
+                    .accessibilityIdentifier("elapsedTime")
+            }
+            LevelMeter(levels: model.recorder.levels, reduceMotion: reduceMotion)
+                .frame(height: 40)
+            RecordingSendButton(model: model)
+                .hidden()
+                .anchorPreference(key: RecordingSendBoundsKey.self, value: .bounds) { $0 }
+        }
+        .padding(16)
+        .background(HermesPalette.control(colorScheme), in: RoundedRectangle(cornerRadius: 26))
+    }
+
+    private var recordingHeaderLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .center))
+    }
+
+}
+
+struct RecordingSendBoundsKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+struct RecordingSendButton: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Button { model.stopAndSend() } label: {
+            Label("Send", systemImage: "arrow.up")
+                .frame(maxWidth: .infinity, minHeight: 32)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .accessibilityIdentifier("stopSendButton")
+    }
+}
+
+private struct LevelMeter: View {
+    let levels: [Float]
+    let reduceMotion: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 3
+            let count = max(levels.count, 1)
+            let width = max(1, (geometry.size.width - spacing * CGFloat(count - 1)) / CGFloat(count))
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(levels.indices, id: \.self) { index in
+                    let level = CGFloat(min(max(levels[index], 0), 1))
+                    Capsule()
+                        .fill(Color.accentColor.opacity(0.4 + 0.6 * Double(level)))
+                        .frame(width: width, height: max(4, geometry.size.height * level))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(reduceMotion ? nil : .linear(duration: 0.08), value: levels)
+        }
+        .accessibilityHidden(true)
+    }
+}

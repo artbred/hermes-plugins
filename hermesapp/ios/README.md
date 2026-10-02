@@ -1,0 +1,200 @@
+# Hermes for iOS
+
+Native SwiftUI client for Hermes conversations. Text and transcribed voice messages run the full server-side agent. This app no longer uploads diary entries to a custom plugin.
+
+## Build and install
+
+Requirements: Xcode with the iOS 26 SDK or later, Swift 6.2 or later, and iOS 18 or later.
+
+```sh
+open ios/HermesVoice.xcodeproj
+```
+
+Select your iPhone and Run. Automatic signing uses team `8RK5YR2SLU` and the registered bundle `com.artbred.hermesapp`; change `DEVELOPMENT_TEAM` and the bundle ID in `project.yml` for another account. Build 13 uses this new identifier, so it installs separately from the previous `com.artbred.hermesvoice` app. The old app, chats, and Keychain remain intact; the new installation has its own local storage and connection settings. The public `hermesvoice://` shortcut scheme is unchanged.
+
+The current installation is named **Hermes**. The preserved legacy `com.artbred.hermesvoice` installation remains **Hermes Voice**; build 10 predates the HTML renderer and can display HTML replies as source. Open **Hermes** for rendered saved replies. Renaming changes neither bundle identity nor stored chats, Keychain, notifications or shortcut routing; the Xcode target and scheme remain `HermesVoice`.
+
+The committed project is generated with XcodeGen:
+
+```sh
+cd ios
+xcodegen generate
+xcodebuild -scheme HermesVoice -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+xcodebuild -scheme HermesVoice -destination 'generic/platform=iOS' -allowProvisioningUpdates build
+```
+
+The app icon uses the [native Hermes desktop artwork](https://github.com/NousResearch/hermes-agent/blob/main/apps/desktop/assets/icon.png). To refresh it from a Hermes checkout, run `swift scripts/make-icon.swift /path/to/hermes-agent/apps/desktop/assets/icon.png` from `ios/`. The importer preserves the artwork and composites its transparent padding onto white to produce an opaque 1024×1024 iOS icon; iOS applies the final corner mask.
+
+## Connect
+
+1. Open Menu → Settings. Settings is a native full-screen navigation destination with Back/swipe-back and Save.
+2. Enter `https://hermes.sashakuzina.com` and the single `API_SERVER_KEY` from `~/.hermes/.env` on `kuzin`.
+3. Tap **Test connection**, then **Save**. The check covers chat, transcription, speech synthesis, file upload, intent routing, titles, and memory storage without performing inference or writing user data.
+
+The app uses this one URL/token pair for every operation. Dashboard session tokens and provider API keys stay on the host; there are no separate voice or file connection settings.
+
+Existing installations automatically migrate the known `notes.sashakuzina.com` URL to the new hostname, keep the native API token, and remove obsolete speech settings in an atomic Keychain update. Custom server URLs are preserved. A Keychain failure is shown explicitly rather than claiming a successful migration. Plain HTTP is for local networks only; use HTTPS remotely.
+
+## Chat
+
+- Use Menu at top left for chat search, recents and their refresh control, with Settings at the bottom. New Chat appears only at top right; there is no duplicate New Chat action in the left sidebar.
+- Type in **Ask Hermes**, then Send. The reply is silent. The rounded composer stays above the keyboard; the adaptive blue/indigo/purple gradient follows the visible chat viewport as the keyboard opens and dismisses, rather than moving behind the keyboard. Its end color continues through the bottom safe area and behind the system keyboard's rounded corners, without exposed black bands or corner wedges.
+- Tap the microphone to record into the current chat. Tap **Send** to transcribe and classify the recording. Requests go to Hermes and receive spoken replies; clear thoughts or diary entries are saved silently. Tapping anywhere else in the app immediately discards the recording without activating the tapped control.
+- Your recorded voice messages show a static **Audio message** indicator with the transcription underneath. There are no original-recording play/pause/resume, seek, share, duration, or copy-toolbar controls; select the transcription text to copy it. Original files and metadata remain stored for transcription and retry. AI reply speech and **Listen** are unchanged.
+- Tap **Listen** on an assistant reply to generate/play speech; subsequent taps pause or resume it. Generated files are cached. An automatic spoken reply does not interrupt a recording you are already reviewing.
+- Assistant replies are inline HTML interfaces, not raw markup: readable headings, cards, task lists, tables, expandable details, and local filters/toggles. Ordered-list numbers have a font-scaled gutter inside the reply's clipping bounds, preserving native numbering and nesting. Links are underlined; HTTPS sources open in an in-app Safari preview. Local controls change only the displayed reply, not real tasks or native tool approvals. Tables/code scroll horizontally and tall replies offer **Show full reply**. Older Markdown remains readable, including inert HTML code examples.
+- **Copy reply**, speech, chat previews/search, title generation, and intent context use semantic human text without CSS or scripts. Copying or playing a reply does not reset its local controls. Control state is transient and resets when the document reloads or the app relaunches.
+- Use **Chats** to search, reopen, and continue previous conversations. Each selected chat has its own screen identity, so a previous transcript cannot remain paired with the new chat’s activity. Refresh imports native API-origin sessions from Hermes. Existing app conversations retain their local audio metadata.
+- Short conversations start at the top below the header, with an explicit top-aligned viewport extent and blank space beneath the exchange rather than being bottom-aligned above the composer. This placement survives keyboard focus and reopening. Hermes's provisional answer appears as it streams; overflowing conversations follow new content while positioned at the latest reply. There is no floating **Latest** or jump-to-bottom button: scroll manually to the end to resume following. A pending tool approval shows **Review request**. Open it to inspect the command and choose a server-provided option, or close/swipe away the review without making a decision.
+- While processing, an assistant-side **Hermes** activity indicator shows the current step, real tool activity when available, and streamed reply text. The composer replaces its microphone/send controls with a square **Stop** button; you can still draft your next message.
+- **Stop** cancels local preparation or requests interruption of an accepted run. **Stopping…** remains visible until Hermes confirms a terminal outcome. A stop during submission waits for the run ID, then stops that same request. Stop intent survives relaunch; a failed stop stays visibly pending and can be retried without starting a second turn. A completed reply wins a race with Stop. Already-performed actions cannot be undone, and an in-flight brain-dump save waits for its receipt rather than claiming the thought was discarded. Interrupted partial replies are not spoken automatically.
+- Other chats remain usable while a chat runs, awaits approval, stops, or imports attachments. Import progress/errors belong only to their originating chat. The chat list shows per-chat work/approval status. Approval responses retain the displayed chat/run/request identity even if selection changes before the response is sent.
+- Swipe or long-press a chat to delete its local copy, audio, and attachments. Server history/uploaded files are not deleted; the session is hidden from later imports on this phone.
+
+Speech behavior is **per message**: a voice request gets a spoken reply; a text turn stays silent until Listen is tapped; a brain dump gets no assistant reply or speech at all. Brain dumps show **Saved to brain dump** after durable server acceptance. Jev via OpenRouter selects this path only with confidence ≥0.90 and brain-dump probability ≥0.95. Ambiguous/low-confidence decisions become Chat; API/invalid-response failures show Retry rather than guessing.
+
+The auxiliary title model is Gemini 3.7 Flash: same-language 3–6-word titles, temperature 0.2, minimal reasoning, and a 256-token total output budget (this provider does not allow reasoning to be disabled). Title generation does not delay the message result. Titles are persisted and generated once per conversation; a failed title request retries on reopening that chat.
+
+## File attachments
+
+Tap **+** in the composer to choose one or more files from Files, including iCloud and installed file providers. Regular files up to **100 MiB each** are supported. The app coordinates the provider read, copies each selected file into protected local storage, and saves draft attachments with their chat. You can switch chats or relaunch without losing selected files.
+
+Tap a file card to preview it with Quick Look, or its **×** to remove an unsent attachment. Send is enabled for file-only messages as well as text plus files. To speak a request about files, attach them and use the in-app microphone; that turn always runs Hermes rather than being classified as a brain dump.
+
+On Send, attachments upload through the scoped native file service before the agent run starts. An upload failure preserves the message/files and does not submit a partial request. Receipts and the final agent input are persisted so retrying an uncertain submission reuses the same remote paths, session identity, and idempotency key. Hermes receives a manifest of server-local paths and reads the actual files with its file/vision tools. Interpretation of a particular format depends on the tools/codecs available on Hermes; the app does not fake extraction or silently omit files.
+
+Sent file previews use the local copy and remain available after relaunch. Removing a chat deletes those local copies only. Uploaded files remain under the server's managed attachments directory until deliberately removed there.
+
+
+## Shortcuts and Action Button
+
+| Action | Behavior |
+|---|---|
+| **New Voice Chat** | If idle, opens the app, creates a new chat, and starts recording. If already recording, sends that take in its existing chat. |
+| **Send Message** | Opens a new chat and submits the supplied text as an agent turn. |
+
+For the Action Button: iPhone Settings → Action Button → Shortcut → Hermes Voice → **New Voice Chat**. Grant microphone permission on first use. If the app is not active yet, recording starts when it becomes active.
+
+`hermesvoice://record` follows the same state-aware start/send path. `hermesvoice://compose` opens a fresh text chat. The active recording's chat is retained when the shortcut sends it.
+
+## Persistence and background limits
+
+Before submission, the app saves the user message, recording, and stable request identity under Application Support/`Chats/`. Run IDs and replies are persisted atomically. Relaunching resumes accepted runs by ID; it does not submit their user message a second time. Failed requests have a visible Retry action. Network errors do not remove the original recording.
+
+An exact native `404 run_not_found` ends the unavailable **local attempt** instead of locking the chat indefinitely. Its message and run ID remain visible, with a warning to check history before retrying; new messages, explicit Retry, and local deletion are available. This does not claim the remote work stopped or never happened. Ordinary connection, authentication, and proxy errors remain recoverable without replaying automatically.
+
+History imports recheck ownership and hidden-session state after downloading messages. A fresh native session matching an already accepted local run is not imported as a second chat before its first status response. This prevents duplicate local entries competing for the same native conversation. Existing conversations and recordings are preserved.
+
+There is no single native audio-and-run endpoint: transcription, run admission, and synthesis are separate requests. The app requests a limited iOS background task, but cannot promise that a voice message starts an agent run while suspended. Reopen the app to resume pending steps. Once accepted, Hermes runs independently of the phone. Pending speech synthesis resumes on reopening; already generated audio remains available offline.
+
+Reply notifications are default app behavior in a push-enabled signed build: the app requests iOS permission on first foreground use and automatically registers the device. Menu → Settings → Notifications shows read-only registration status, with no in-app enable button, toggle, or settings shortcut. Users manage or disable permission in iPhone Settings. New permitted requests must register with the notification service before admission; registration failures remain visible rather than silently dropping their notification. Successfully completed, nonempty replies alert while the app is not active. Replies persisted in the foreground are acknowledged; replies fetched in the background are not treated as delivered to the user. Old history without a notification subscription is never acknowledged through the push service. Silent diary saves and stopped/failed runs do not produce reply alerts. Simulator and non-push development builds report unsupported signing and continue ordinary chat without push registration.
+
+Closed-app delivery requires deployment of [`notifications/server.py`](../notifications/server.py), an APNs provider key for topic `com.artbred.hermesapp`, and a matching signing profile with Push Notifications. Current signed builds retain the required `aps-environment` entitlement; do not remove it to bypass signing errors. The signed build 12 does not support APNs. Simulator/protocol checks do not prove Apple or physical-device delivery. APNs timing also depends on notification permission, Focus settings, and network availability.
+
+Unknown submission outcomes reuse their existing idempotency key. Explicit retries of terminal or unavailable runs create a new attempt. The server's deduplication retention is finite; verify server history before retrying a very old uncertain submission, especially when the agent can perform external actions.
+
+Unreadable chat storage is preserved and surfaced as an error rather than overwritten. The old diary app's `Outbox/` data is left intact and is not automatically replayed as agent instructions.
+
+## Layout
+
+```text
+HermesVoice/
+  AppModel.swift          chat selection, capture, durable run orchestration, speech policy
+  Model/Chat.swift        conversations, user/assistant messages, delivery states
+  Networking/APIClient.swift   native runs, SSE, history, STT/TTS, auth and error handling
+  Storage/               atomic chat index, audio paths, Keychain connection settings
+  Audio/                 AAC recorder and generated-audio playback
+  Intents/               New Voice Chat and Send Message
+  Rendering/             HTML normalization, mobile model contract, isolated inline WebKit replies
+  Views/                 chat transcript, composer, history, approvals, settings
+HermesVoiceTests/        native protocol and conversation behavior (Swift Testing)
+```
+
+SwiftSoup is pinned to 2.9.6: its DOM serializer does not reuse pre-sanitized source spans, and it avoids the parsing-time source-range recursion that crashed 2.13.9 on deeply nested model output. Normalization bounds subsequent native DOM walks while preserving answer text. The GFM compatibility path uses swift-markdown 0.9.0; it is not the requested output format.
+
+
+## Verification
+
+The automated suite covers speech policy (automatic for voice, on demand for text), cached audio, accepted-run recovery, storage failures, URL/auth boundaries, native SSE, speech response validation, and history pagination. Integration verification must also exercise the actual app and native Hermes services; mocked provider responses alone do not demonstrate a working conversation.
+
+The native deployment smoke exercised Russian Fish speech → Hermes STT → a real tool-using agent run → Fish reply audio, plus idempotent replay and private-route rejection. iPhone simulator UI verification exercised new/existing chats, session-context continuation, persistence after relaunch, Listen/Stop audio, shortcut recording, and automatic spoken replies from a real prerecorded AAC message.
+
+The same chat/history/context/relaunch/Listen/recording flow also passed on the connected physical iPhone 18 Pro (iOS 27.0.1), with native connection settings saved through the app. The Swift Testing run passed 38 cases across 17 test functions. Automatic voice-reply playback was additionally verified on the simulator using real server-generated speech, not a mocked STT/TTS service.
+
+The automatic brain-dump refinement passed 49 test cases across 22 functions, including confidence boundaries, malformed judgments, matching memory receipts, and no-agent/no-TTS behavior. Live English/Russian Jev examples confirmed notes versus requests; a real AAC note passed STT → Jev → Hindsight retain → generated title in the simulator, with no assistant reply or run ID. Hindsight's operation completed and its document preserved the transcript verbatim; the synthetic test memory was removed afterward. Tap-outside cancellation and Send passed UI smoke; repeated OS `hermesvoice://record` activation retained the same chat and submitted exactly one recorded message.
+
+Build 4 was also installed and verified on the physical iPhone 18 Pro (iOS 27.0.1): full text chat, auxiliary title generation, hidden message headers, tap-outside cancellation, and Send. A controlled AAC recording passed the live brain-dump pipeline on that phone and persisted after relaunch with one user message, no run ID, and no speech request; the matching Hindsight operation completed. Two OS URL activations in the same app process created one chat and submitted one recording, confirming the state-aware shortcut. The short shortcut take contained no speech and correctly showed a no-speech error instead of starting an agent.
+
+The sidebar/attachments update passes 53 regression cases across 26 functions. Simulator UI smoke exercised Menu → Settings, Files selection, draft removal, file-only Send availability, a real file-assisted Hermes reply, and attachment persistence across relaunch. Separate live runs read a reference code from text and PDF uploads and identified an uploaded image through the native tools. The connected iPhone 18 Pro passed the full picker → import/remove → upload → agent answer → relaunch → actual Quick Look content flow, plus the redesigned layout, keyboard-safe gradient, menu/Settings, chat continuity, on-demand playback, and recording cancellation.
+
+Build 6 passes 61 regression cases across 29 functions, including original-recording pause/seek/resume, missing-file no-TTS behavior, and safe known-host migration. Live simulator checks against `hermes.sashakuzina.com` verified native Settings push/back/swipe-back, a single URL/token reaching all services, voice-card persistence through real transcription/agent processing, original audio playback after relaunch, exact transcription copy/paste, and silent brain-dump storage with its original audio preserved. A separate live upload/read run used only the same API Bearer token. Physical build-6 verification requires the iPhone to be connected and unlocked.
+
+Build 7 passes 71 regression cases across 39 functions. Stop coverage includes server acknowledgement versus terminal confirmation, duplicate stop taps, delayed/uncertain admission, completion races, failed stops, relaunch recovery, local preparation cancellation, accepted memory writes, interrupted voice replies without TTS, and native tool activity. Live simulator UI exercised Thinking → Stopping → server-confirmed Request stopped, restored the stopped state after relaunch, and retrieved a real native run that completed while the app was not running. The signed build was produced; physical-device verification remains unavailable until the iPhone is connected.
+
+Light/dark UI checks and the largest accessibility text size exercised the same live stop flow. The activity indicator scales with text. The inset-based Latest control from that build was replaced in build 15 with a stable overlay and semantic bottom-edge following, so its visibility no longer changes the transcript's viewport. Server readback confirmed all five UI-initiated verification runs were cancelled; the separate closed-app recovery run completed.
+
+Build 8 passes 78 regression cases across 44 functions. Failing-before regressions reproduced a cross-chat import gate, duplicate history imports during ownership changes, and pre-status fresh-session aliases. A pre-fix UI snapshot reproduced the nondismissible approval trap; the updated UI let B complete while A remained unapproved. A separate real-app simulator run against the VPS created A/B, completed B while A stayed active, stopped only A, and continued B with preserved context. SSH-native checks independently proved the same run/session isolation. Gateway, dashboard, speech bridge, and attachment services were active; no VPS configuration change or restart was needed.
+
+Build 10 passes 97 regression cases across 49 functions and was exercised on the physical iPhone 18 Pro (iOS 27.0.1). Device checks covered the unified connection, native Settings keyboard Done/navigation, concurrent chats and scoped Stop, correct transcript selection, context/relaunch, file picking/Quick Look/upload/native reading, microphone capture/discard, original-recording play/pause/seek/resume, transcript copy/paste, automatic and on-demand spoken replies, silent diary storage, and unavailable-run recovery controls. Approval review was additionally checked on-device with an isolated pending-approval fixture, without executing a risky command.
+
+The original controlled recording remained byte-identical on the phone; Hermes produced a real MP3 reply. The diary operation completed with its verbatim transcript and was then deleted. Nineteen owned server verification sessions were removed through guarded native deletion; ten current phone fixture chats and their audio/attachments were removed through the app's store, with fingerprint checks and preservation checks for unrelated conversations.
+
+Audio category/activation/deactivation and first-time player/recorder preparation run on a serial background queue; stale starts cannot resume after cancellation. Chat switching replaces the selected screen without inheriting the menu-close animation. Settings uses the native keyboard Done action instead of the custom keyboard toolbar that produced an invalid-frame warning.
+
+On iOS 27.0.1, AVFoundation can still emit its synchronous first-start `AVAudioSession_iOS.mm:978` performance diagnostic from inside `AVAudioPlayer`/`AVAudioRecorder`, even after off-main preparation. Physical playback, seek, pause/resume and recording/cancellation checks pass; this is not a claim that all framework diagnostics are absent.
+
+Build 11's simulator regression sweep passes 51 test functions across 8 suites, including owning-chat routing and foreground navigation preservation. The notification service passes 11 regression cases plus Ruff. A real native Hermes run completed after its HTTP client disconnected and the notification bridge restarted; the restored bridge generated one correctly routed, content-private APNs request at a captured transport boundary. The owned synthetic native session was deleted. The actual simulator app displayed Apple's notification-permission prompt. APNs acceptance and physical notification presentation remain unverified until Apple credentials/signing are available.
+
+Build 12 requests mobile HTML through native per-run instructions and renders isolated interactive replies inline. Native simulator smoke verified task-card completion, table and overdue filters, decoded-text copy/search, in-app source preview and return, script/network isolation, the visibly reachable final row of a 200-row reply, and dark mode at the largest accessibility text size. A real Hermes-generated interface responded to a local control and produced real on-demand speech without resetting its state.
+
+The final integrated simulator regression sweep passes 72 tests across 10 suites, including unavailable-run recovery, stale audio-start cancellation, semantic HTML/Markdown extraction, deeply nested output, and source-link boundaries.
+
+The signed arm64 build 12 and IPA were produced with the cached development profile, without APNs; signature verification passed. Physical installation and device UI verification remain blocked while the iPhone is unavailable. Owned native verification sessions, five simulator fixture chats, and their generated audio were removed; all sixteen unrelated simulator chats were preserved.
+
+Build 13 migrates the app, test bundle, Keychain service, diagnostic identities, and default APNs topic to `com.artbred.hermesapp`. The simulator regression run passed all 72 tests (120 parameterized runs), and the notification service passed all 11 tests. The compiled simulator app reports bundle `com.artbred.hermesapp` and version 13 and was launched to the real chat surface. This verifies the identity cutover, not APNs delivery; the physical push-enabled install and alert checks remain separate requirements.
+
+The arm64 build 13 passed automatic signing and strict signature verification with `application-identifier=8RK5YR2SLU.com.artbred.hermesapp` and `aps-environment=development`; the matching profile includes the iPhone 18 Pro. The notification service is active and enabled on `kuzin` with Key ID `7F5N86YMF4`, restricted to this topic and sandbox APNs. This key supports development-signed installations, not production/App Store notifications.
+
+Build 15 replaces offset-based scroll-intent guesses and repeated proxy jumps with `ScrollPosition(edge: .bottom)` and SwiftUI's `isPositionedByUser` provenance. Latest is a stable overlay, appears only when genuinely reading away from the newest content, and makes a single nonanimated return. Notification permission/registration remain automatic; Settings shows only status. Both notification delegate callbacks now complete on the main queue: build 14's real tap crash came from UIKit state restoration invoked by the async delegate completion on a cooperative background executor.
+
+The integrated build-15 suite passed **83 tests / 132 executions**, with no failures or skips. Strict signature verification passed, and build 15 was installed on the physical iPhone 18 Pro. Actual Settings verified the saved server connection, **Reply notifications enabled**, and the absence of notification action buttons. Fresh/short chats stayed free of Latest through startup, keyboard changes, real reply completion, settling and drag gestures. A real long interactive reply stayed anchored through streaming; deliberate outer-transcript scrolling showed Latest, whose tap returned to the bottom without a greeting reset and preserved its checkbox and counter state. Real foreground requests raised no reply banner. A real background request in chat A completed while chat B was selected; Apple's alert contained only the generic reply-ready text, and tapping it opened A's reply without crashing. The signed IPA is `/tmp/HermesVoice-push-15-20261001.ipa`.
+
+Verification cleanup removed four generated phone chats and three fingerprint-matched native sessions, preserved all 39 pre-existing phone chats, and uninstalled the temporary UI driver. Temporary access-token transfer copies were removed after Keychain import. Only scoped screenshots/JSON evidence remains outside the repository under `/tmp/hermes-notifications-evidence15`; private signing keys were never copied into the app or source tree.
+
+Build 16 top-aligns fitting conversations below the header and uses `ScrollGeometry.visibleRect` for actual content overflow/end visibility, rather than reconstructing offsets and insets or applying a near-bottom threshold. Native scroll-content margins replace the trailing spacer, so blank breathing room cannot create a false Latest affordance. Recorded input voice cards now show only an **Audio message** indicator and selectable transcription. Original-playback branches, seek/progress APIs and their periodic update task were removed; recording files/schema, STT/retry, automatic AI speech and AI Listen/cache/pause/resume remain intact.
+
+The integrated build-16 suite passed **86 tests / 145 executions**, with no failures or skips; strict signature verification passed and the app was installed on the physical phone. Completed display fixtures—not mocked services—verified the actual short-chat surface: first message 40 points below the header, unchanged alignment with the keyboard and after relaunch, no Latest through four bounce gestures, and AI Listen available. Physical voice-card checks confirmed the audio indicator/transcription and absence of original playback/share/slider controls while AI Listen stayed enabled. An isolated iOS 26.5 simulator, containing no customer records or credentials, verified long outer-history scrolling, Latest's return to the newest content, preserved HTML counter state, and disappearance of Latest at the actual visible end.
+
+Physical long-history verification and fixture cleanup are explicitly pending: the phone disconnected and the user approved pausing until reconnection. Only these three generated display chats are eligible for removal: `Layout short16 34e61` (`34e61dd3-a941-4b4d-a33f-08e5909810d5`), `Layout long16 2d292` (`2d2920ec-b611-4a90-bf7f-31d9bf58cd0a`), and `Layout voice16 cb6ef` (`cb6ef104-8ba4-4e1b-829b-10cd411e2c26`). All 39 existing records and hidden-session IDs were retained during fixture transport; temporary plaintext customer-content index copies were deleted. The protected follow-up driver/configuration and baseline fingerprints remain under `/tmp/hermes-chat-layout-20261001` solely for exact-ID UI cleanup and later preservation comparison. Scoped evidence is `/tmp/hermes-layout-evidence16`; the signed IPA is `/tmp/HermesVoice-layout-16-20261001.ipa`.
+
+Build 17 separates the keyboard-avoiding gradient background from the full-screen base color. The gradient is anchored to the visible chat viewport and no longer inherits the base layer's safe-area expansion. The integrated suite passed **86 tests / 145 executions**. An actual dark-mode simulator smoke focused an empty-chat composer, opened the keyboard and repeated focus after New Chat; the surrounding gradient remained visibly blue/purple, with the same sampled RGB `(22, 26, 44)` before/after and on refocus while the composer moved from y791 to y490. Build 17 passed strict signing verification; `/tmp/HermesVoice-keyboard-17-20261001.ipa` is ready. Physical deployment remains pending because both phones are unavailable and the user previously could not reconnect; build 16 remains the last observed installed phone version.
+
+Build 18 corrects clipped ordered-list numbers by separating the unordered-list `1.35em` indentation from a `3em` ordered-list gutter. Native outside markers, numbering and hanging indentation are retained; authored reply styles keep their existing precedence. The integrated suite passed **86 tests / 145 executions**. Actual simulator rendering and native Vision glyph recognition verified complete line-start markers `56.` through `60.`, including **58. Layout row 58 2d292**, plus `998.`, `999.` and `1000.` at a larger list font. Strict signature verification passed; `/tmp/HermesVoice-list-18-20261001.ipa` includes this fix and the keyboard-gradient correction. Physical installation remains pending reconnection; no phone deployment is claimed.
+
+Build 19 was installed as **Hermes**, distinct from the preserved legacy **Hermes Voice** build 10. Its complete physical-device suite passed **86 tests / 145 executions**. Legacy storage was left intact. All seven inspected saved HTML replies normalized without a raw-source fallback across 21 serial checks and 700 concurrent checks; no speculative renderer/parser change was made.
+
+Build 20 corrects the remaining bottom-safe-area defect: a flexible gradient background container extends through `.container`'s bottom safe area while retaining keyboard avoidance. Ignoring the safe area on only the fixed-height gradient in build 19 had left the home-indicator band at the flat base color. The full build-20 iOS 26.5 emulator suite passed **86 tests / 145 executions**, with no failures or skips.
+
+Actual dark-mode emulator UI verification passed all **three scenarios**: installed-version confirmation; colored bottom coverage through two keyboard open/dismiss cycles, identical restored bottom samples and no false Latest on fitting content; and saved HTML rendering after another-chat/back navigation and process relaunch. Semantic paragraphs and a working local counter were verified at every reopening stage, with no literal tags or formatting-failure UI. The keyboard-edge measurement includes iOS's prediction strip; XCTest's key-grid frame alone excludes it. No server requests, credentials or customer records were used in the isolated emulator.
+
+Automated build-20 testing used the emulator at the user's request. Phone fixture cleanup remains deferred: besides the three build-16 display chats documented above, only the two owned build-19 IDs `6b29b190-6a61-4aee-944a-0901e0f01901` and `6b29b190-6a61-4aee-944a-0901e0f01902` are eligible for removal. Existing chats, hidden-session IDs, audio, credentials and the legacy installation must remain untouched. Generated plaintext customer-content diagnostics and normalization scaffolds were deleted.
+
+Final build-20 evidence is preserved outside the repository: `/tmp/hermes-emulator-build20.xcresult` (complete suite), `/tmp/hermes-emulator-ui20.xcresult` (actual UI scenarios), and `/tmp/hermes-emulator-evidence20` (scoped screenshots and measured JSON). The isolated test emulator, its two synthetic chats, and the temporary UI runner/project were removed after proof. Only opaque baseline fingerprints/IDs and owned-fixture cleanup metadata remain at `/tmp/hermes-render-cleanup-19` for the deferred phone cleanup; no customer reply copies are retained there.
+
+At the user's subsequent deployment-only request, build 20 was rebuilt for the connected iPhone 18 Pro, passed strict signature verification, and installed in place as **Hermes 1.0 (20)** (`com.artbred.hermesapp`). The device's installed-app inventory confirmed version 20 and the app launched successfully for manual testing. No automated phone tests, fixture cleanup, app-data reset or changes to the legacy installation were performed.
+
+Build 21 addresses the user's marked screenshot: the black wedges were behind the rounded system keyboard, below the keyboard-avoiding chat viewport, not the home-indicator band fixed in build 20. A separate full-screen underlay composites the shared `HermesPalette.chatAccent` end color over the existing base and ignores keyboard/container safe areas; the foreground gradient and composer retain their existing keyboard avoidance. This keeps the keyboard's exposed corners and translucent material continuous with the chat instead of revealing the hosting view's black background.
+
+The exact corner smoke failed before the fix: both exposed corners were RGB `(0, 0, 0)`, versus `(40, 17, 46)` immediately above. Build 21 passed two real keyboard focus/dismiss cycles in both dark and light emulator appearances. Dark-mode corner RGB became `(40, 16, 46)` on both sides, only one channel level from the adjacent gradient; the keyboard-closed background remained intact. The full emulator suite passed **86 tests / 145 executions**, with no failures or skips. No automated phone UI checks were run.
+
+Build 22 removes the left-sidebar **New Chat** button, retaining search and the Recents refresh action; the main top-right New Chat button remains. Short-chat layout now supplies a top-aligned minimum viewport extent separately from `LazyVStack`, rather than relying only on SwiftUI's undersized-content alignment anchor. The lazy stack keeps its natural height for long history; existing scroll-position provenance and Latest transitions remain unchanged.
+
+The final emulator suite passed **86 tests / 145 executions**, with no failures or skips. Actual isolated-emulator screenshots verified the simplified sidebar and a saved short exchange beneath the transcript header, with substantial whitespace below it, both after relaunch and with the keyboard open. Fitting content showed no Latest indicator. The long fixture's settled rendering was compared against build 21 and remained unchanged. Complete automated UI-scenario success is not claimed: XCTest UI automation stalled, and native-driver receipt/focus problems prevented completing every planned interaction; scoped screenshots provided the observed surface proof.
+
+Build 21's phone installation attempt failed because the intended iPhone was unavailable. The user then explicitly instructed **do not deploy until I ask**: build 22 remains local/emulator-only, and no subsequent physical-device install or launch was performed. Do not deploy future changes without a new explicit request.
+
+Final local evidence is retained at `/tmp/hermes-layout22-evidence` (sidebar, short chat with/without the keyboard, and the prior/current long-fixture comparison) and `/tmp/hermes-emulator-build22-verified.xcresult` (complete suite). The owned verification emulator, its completed synthetic chats and temporary UI project were removed after observation. No customer chat copies or credentials were used.
+
+Build 23 removes **Latest** completely: its overlay, accessibility action/identifier, visibility state and continuous visibility-only geometry callback are deleted. Manual scrolling back to the visible end still rearms bottom-edge following once, while history reading and short-chat top alignment remain intact. Obsolete button/visibility tests and their simulation helper were removed; retained scrolling tests cover user provenance, completed-scroll boundaries, keyboard-visible geometry and position acknowledgement.
+
+The complete emulator suite passed **79 tests / 140 executions**, with no failures or skips. Actual isolated-emulator launch smoke displayed a 30-message native history and a fitting saved exchange, both without a floating jump control. The history's newest native row remained visible and the short exchange remained top-aligned. Evidence is retained at `/tmp/hermes-no-latest23-evidence` and `/tmp/hermes-emulator-build23-verified.xcresult`; the owned emulator and fixture transport file were removed after observation. Build 23 remains local: no physical-device deployment was performed.

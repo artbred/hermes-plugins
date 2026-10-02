@@ -4,6 +4,8 @@
 !.env.example
 config.yaml
 config.yml
+watchdog.yaml
+WATCHDOG.yml
 auth.json
 *credentials*
 *secrets*

@@ -1,0 +1,32 @@
+[Unit]
+Description=Hermes reply notification delivery
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/hermes-push
+ExecStart=/opt/hermes-push/.venv/bin/python /opt/hermes-push/server.py
+EnvironmentFile=/etc/hermes-push.env
+LoadCredential=apns-key:/etc/hermes-push/AuthKey.p8
+Environment=APNS_KEY_PATH=%d/apns-key
+Environment=PUSH_DATABASE=/var/lib/hermes-push/delivery.sqlite
+Environment=PUSH_HOST=172.23.0.1
+Environment=PUSH_PORT=9123
+StateDirectory=hermes-push
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

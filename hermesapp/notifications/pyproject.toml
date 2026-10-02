@@ -1,0 +1,18 @@
+[project]
+name = "hermes-reply-notifications"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12,<4",
+    "httpx[http2]>=0.28,<1",
+    "PyJWT[crypto]>=2.10,<3",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
