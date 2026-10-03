@@ -24,7 +24,8 @@ struct RootView: View {
                             $0.disablesAnimations = true
                         }
                         .navigationBarTitleDisplayMode(.inline)
-                        .toolbarBackground(.hidden, for: .navigationBar)
+                        .toolbarBackground(HermesPalette.background(colorScheme), for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
                         .toolbar { chatToolbar }
                         .navigationDestination(isPresented: $model.isSettingsPresented) {
                             SettingsView(model: model)
@@ -145,7 +146,7 @@ struct RootView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(model.selectedChatModel?.displayName ?? "Choose model")
-                        .font(.body.weight(.medium))
+                        .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                     if model.modelSelectionError != nil {
                         Image(systemName: "exclamationmark.circle")
@@ -333,7 +334,7 @@ private struct ChatScrollAppearance: ViewModifier {
     func body(content: Content) -> some View {
         let scroll = content.scrollBounceBehavior(.basedOnSize)
         if #available(iOS 26.0, *) {
-            // The system scroll-edge backdrop is separate from the hidden navigation-bar background.
+            // Keep the scroll-edge effect separate from the opaque navigation-bar background.
             scroll.scrollEdgeEffectHidden(true, for: .top)
         } else {
             scroll
