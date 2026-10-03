@@ -165,6 +165,13 @@ struct ResponseContentTests {
         #expect(content.plainText == "Deep value")
     }
 
+    @Test("Quoted side details stay visible on screen but out of speech, copy and titles")
+    func secondaryQuotesUnspoken() throws {
+        let content = ResponseContent(raw: "<p>Saved to your watchlist.</p><blockquote><p>Verified live: 24 films with it on top.</p></blockquote>")
+        #expect(content.plainText == "Saved to your watchlist.")
+        #expect(try elements(parsed(content), "blockquote").count == 1)
+    }
+
     private func parsed(_ content: ResponseContent) throws -> SwiftSoup.Document {
         try SwiftSoup.parse(content.html)
     }

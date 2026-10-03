@@ -474,6 +474,9 @@ private struct PlainTextWriter {
         switch name {
         case "br":
             writeLineBreak()
+        case "blockquote":
+            // Secondary depth: shown gray on screen, never spoken, copied or titled.
+            return
         case "img":
             writeCollapsible(attribute("alt", of: element))
         case "hr":
