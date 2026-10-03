@@ -425,7 +425,7 @@ private enum ReplyURLPolicy {
 private struct PlainTextWriter {
     private var text = ""
     /// When true, `em`/`i` asides are skipped: italics are the reply convention for side details.
-    private let excludingEmphasis: Bool = false
+    private let excludingEmphasis: Bool
     private var pendingBreaks = 0
     private var pendingSpace = false
     private var mayInsertSpace = false
@@ -434,6 +434,10 @@ private struct PlainTextWriter {
     /// Numbering of the lists being written, innermost last; `nil` for unordered lists.
     private var lists: [Numbering?] = []
     private var rowCellCounts: [Int] = []
+
+    init(excludingEmphasis: Bool = false) {
+        self.excludingEmphasis = excludingEmphasis
+    }
 
     private struct Numbering {
         var next: Int
