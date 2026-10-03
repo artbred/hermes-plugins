@@ -9,6 +9,56 @@ struct ChatModelSelectionTests {
     private let first = HermesModelChoice(provider: "openrouter", modelID: "example/model-a", displayName: "Model A")
     private let second = HermesModelChoice(provider: "openrouter", modelID: "example/model-b", displayName: "Model B")
 
+    @Test("New chats select the configured mixture preset and uncertain admission keeps that route across cache restoration")
+    func mixtureDefaultAndFrozenAdmission() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = "HermesVoiceTests-\(UUID().uuidString)"
+        defer {
+            for account in ["nativeServerURL", "nativeAPIToken", "nativeVoiceID"] {
+                _ = KeychainItem(service: service, account: account).write(nil)
+            }
+        }
+        let switched = Mutex(false)
+        let server = StubServer { request in
+            switch request.path {
+            case "/api/model/options":
+                let defaultRoute = switched.withLock { $0 }
+                    ? "\"model\":\"example/model-a\",\"provider\":\"openrouter\""
+                    : "\"model\":\"default\",\"provider\":\"moa\""
+                return .json(200, "{\(defaultRoute),\"providers\":[{\"slug\":\"moa\",\"authenticated\":true,\"source\":\"virtual\",\"auth_type\":\"virtual\",\"models\":[\"default\",\"Research\"]},{\"slug\":\"openrouter\",\"authenticated\":true,\"models\":[\"example/model-a\"]},{\"slug\":\"gateway\",\"authenticated\":true,\"source\":\"virtual\",\"models\":[\"default\"]}]}")
+            case "/api/sessions": return .json(200, #"{"data":[]}"#)
+            case "/v1/runs": return .failure(.networkConnectionLost)
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let settings = AppSettings(service: service)
+        try settings.save(serverURL: server.baseURL().absoluteString, token: "synthetic-mixture-token", voiceID: SpeechVoice.defaultReferenceID)
+        let store = ChatStore(directory: directory)
+        let model = AppModel(settings: settings, store: store, client: server.client())
+        await model.refreshModelChoices()
+        let mixture = try #require(model.configuredDefaultModel)
+        #expect(mixture.provider == "moa" && mixture.modelID == "default")
+        model.newChat()
+        #expect(model.selectedChatModel == mixture)
+        model.sendText("Run the configured mixture")
+        try #require(await eventually { model.selectedChat?.messages.first?.submission != nil && model.selectedChat?.messages.first?.error != nil })
+        let frozen = try #require(model.selectedChat?.messages.first?.submission)
+        #expect(frozen.modelChoice == mixture)
+        let restored = AppModel(settings: settings, store: ChatStore(directory: directory), client: server.client())
+        #expect(restored.configuredDefaultModel == mixture)
+        restored.newChat()
+        #expect(restored.selectedChatModel == mixture)
+        restored.selectChatModel(first)
+        #expect(restored.selectedChatModel == first)
+        restored.newChat()
+        #expect(restored.selectedChatModel == mixture)
+        switched.withLock { $0 = true }
+        await restored.refreshModelChoices()
+        #expect(restored.configuredDefaultModel?.id == first.id)
+        #expect(restored.store.chats.flatMap(\.messages).first { $0.submission != nil }?.submission == frozen)
+    }
+
     @Test("Hermes default and common interactive models replace old preferences without catalogue refill")
     func configuredDefaultAndCommonChoices() async throws {
         let directory = makeTemporaryDirectory()

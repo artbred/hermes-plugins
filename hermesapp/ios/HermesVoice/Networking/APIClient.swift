@@ -337,7 +337,9 @@ struct APIClient: Sendable {
         try Task.checkCancellation()
         let inventory: Inventory = try await get(["api", "model", "options"])
         let providers = inventory.providers.compactMap { row -> (Inventory.Provider, Set<String>)? in
-            guard row.authenticated == true, row.source != "virtual", row.auth_type != "virtual",
+            let isMixture = row.slug.lowercased() == "moa"
+            guard row.authenticated == true,
+                  isMixture || (row.source != "virtual" && row.auth_type != "virtual"),
                   row.native_catalog_empty != true, row.free_tier_pending != true else { return nil }
             let unavailable = Set(row.unavailable_models ?? [])
             let available = Set(row.models.filter {
@@ -352,10 +354,14 @@ struct APIClient: Sendable {
             for modelID in row.models where available.contains(modelID) {
                 var choice = HermesModelChoice(provider: row.slug, modelID: modelID, displayName: "")
                 guard seen.insert(choice.id).inserted else { continue }
-                let name = modelID.split(separator: "/").last.map(String.init) ?? modelID
-                choice.displayName = name.replacingOccurrences(of: "-", with: " ")
-                    .replacingOccurrences(of: "_", with: " ").capitalized
-                    .replacingOccurrences(of: "Gpt", with: "GPT")
+                if row.slug.lowercased() == "moa" {
+                    choice.displayName = modelID == "default" ? "Mixture of Agents" : "Mixture of Agents · \(modelID)"
+                } else {
+                    let name = modelID.split(separator: "/").last.map(String.init) ?? modelID
+                    choice.displayName = name.replacingOccurrences(of: "-", with: " ")
+                        .replacingOccurrences(of: "_", with: " ").capitalized
+                        .replacingOccurrences(of: "Gpt", with: "GPT")
+                }
                 availableModels.append(choice)
             }
         }

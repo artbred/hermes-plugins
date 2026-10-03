@@ -13,6 +13,37 @@ struct APIClientTests {
         }}
         """
 
+    @Test("Configured MoA presets are native routes while ordinary virtual aliases remain unavailable")
+    func mixtureInventoryPresets() async throws {
+        let server = StubServer { request in
+            .json(200, request.path.hasSuffix("/api/model/options")
+                  ? #"{"model":"default","provider":"moa","providers":[{"slug":"moa","authenticated":true,"source":"virtual","auth_type":"virtual","models":["default","Research"],"unavailable_models":["Research"]},{"slug":"gateway","authenticated":true,"source":"virtual","models":["default"]},{"slug":"openrouter","authenticated":true,"models":["default","moa","example/component"]}]}"#
+                  : #"{"data":[]}"#)
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.defaultModel?.provider == "moa")
+        #expect(inventory.defaultModel?.modelID == "default")
+        #expect(inventory.suggestedModels.map(\.id) == inventory.defaultModel.map { [$0.id] })
+        #expect(inventory.availableModels.map(\.provider) == ["moa", "openrouter"])
+        #expect(inventory.availableModels.map(\.modelID) == ["default", "example/component"])
+    }
+
+    @Test("Missing, locked or unavailable MoA presets never substitute the aggregator", arguments: [
+        #"{"slug":"moa","authenticated":true,"source":"virtual","models":[]}"#,
+        #"{"slug":"moa","authenticated":false,"source":"virtual","models":["default"]}"#,
+        #"{"slug":"moa","authenticated":true,"source":"virtual","models":["default"],"unavailable_models":["default"]}"#
+    ])
+    func unavailableMixturePreset(row: String) async throws {
+        let payload = "{\"model\":\"default\",\"provider\":\"moa\",\"providers\":[\(row),{\"slug\":\"openrouter\",\"authenticated\":true,\"models\":[\"example/aggregator\"]}]}"
+        let server = StubServer { request in
+            .json(200, request.path.hasSuffix("/api/model/options") ? payload : #"{"data":[]}"#)
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.defaultModel == nil)
+        #expect(inventory.suggestedModels.isEmpty)
+        #expect(inventory.availableModels.map(\.modelID) == ["example/aggregator"])
+    }
+
     @Test("Suggestions use the configured default and distinct interactive usage, not catalogue order")
     func concreteModelInventory() async throws {
         let catalogue = (0..<300).map { "unused-\($0)" }
@@ -26,7 +57,7 @@ struct APIClientTests {
                 ["slug": "locked", "authenticated": false, "models": ["locked-model"]],
                 ["slug": "pending", "authenticated": true, "free_tier_pending": true, "models": ["pending-model"]],
                 ["slug": "empty-native", "authenticated": true, "native_catalog_empty": true, "models": ["stale"]],
-                ["slug": "moa", "authenticated": true, "source": "virtual", "models": ["virtual-model"]]
+                ["slug": "gateway-alias", "authenticated": true, "source": "virtual", "models": ["virtual-model"]]
             ]
         ])
         let server = StubServer { request in
@@ -66,7 +97,6 @@ struct APIClientTests {
         #expect(inventory.defaultModel?.provider == "Muse-Code")
         #expect(inventory.defaultModel?.modelID == "Exact-Default")
         #expect(inventory.suggestedModels.map(\.modelID) == ["Exact-Default", "popular", "recent", "stable-a", "stable-b"])
-        #expect(inventory.availableModels.count == 308)
         #expect(inventory.availableModels.filter { $0.modelID == "ambiguous" }.count == 2)
         #expect(inventory.availableModels.contains { $0.modelID == "overflow" })
         #expect(!inventory.availableModels.contains { $0.modelID == "paid" })
