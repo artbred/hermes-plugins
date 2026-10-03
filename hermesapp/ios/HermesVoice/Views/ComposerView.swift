@@ -13,11 +13,6 @@ struct ComposerView: View {
     @State private var previewURL: URL?
     @State private var handledFocusRequest: UUID?
 
-    private var hasInput: Bool {
-        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !model.pendingAttachments.isEmpty
-    }
-
     var body: some View {
         VStack(spacing: 12) {
             if model.recorder.isRecording {
@@ -63,13 +58,7 @@ struct ComposerView: View {
                             HStack {
                                 attachButton
                                 Spacer()
-                                if model.isBusy {
-                                    if model.isAudioPlaying { voiceButton }
-                                    stopButton
-                                } else {
-                                    voiceButton
-                                    if hasInput { sendButton }
-                                }
+                                composerActions
                             }
                         }
                     } else {
@@ -77,13 +66,7 @@ struct ComposerView: View {
                             attachButton
                             messageField
                                 .padding(.vertical, 11)
-                            if model.isBusy {
-                                if model.isAudioPlaying { voiceButton }
-                                stopButton
-                            } else {
-                                voiceButton
-                                if hasInput { sendButton }
-                            }
+                            composerActions
                         }
                     }
                 }
@@ -213,6 +196,37 @@ struct ComposerView: View {
             : "Tap Send to submit your recording. Touch anywhere else in the app to discard it.")
         .accessibilityIdentifier(model.isAudioPlaying ? "pauseReplyAudioButton" : "recordButton")
     }
+    @ViewBuilder
+    private var composerActions: some View {
+        if model.isBusy {
+            if model.isAudioPlaying { voiceButton }
+            stopButton
+        } else if !model.draft.isEmpty {
+            clearDraftButton
+            sendButton
+        } else {
+            voiceButton
+            if !model.pendingAttachments.isEmpty { sendButton }
+        }
+    }
+
+    private var clearDraftButton: some View {
+        Button {
+            model.draft = ""
+            focused = true
+        } label: {
+            Image(systemName: "xmark")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear message")
+        .accessibilityHint("Clears the typed draft without removing attachments.")
+        .accessibilityIdentifier("clearDraftButton")
+    }
+
 
     private var sendButton: some View {
         Button {
