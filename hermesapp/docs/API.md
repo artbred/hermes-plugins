@@ -180,6 +180,8 @@ To disable the provider later, first select an intentional alternate TTS configu
 
 Title publication first requests `GET /api/sessions/{session_id}/messages?limit=0&order=oldest` to obtain the resolved `session_id` without downloading message rows. It then PATCHes that resolved ID. Titles can be published while the native run is still active.
 
+Native titles are unique because CLI lookups can address sessions by title. On HTTP 400 with the native `Title '<submitted title>' is already in use by session ...` conflict, iOS makes one additional PATCH with ` · <resolved session ID>` appended. The topic prefix is shortened to fit the native 100-Unicode-scalar limit. The acknowledged title is saved locally and pending publication is cleared; generation is not repeated. All other errors, and a failed disambiguated write, retain the pending state and remain visible.
+
 Foreground refresh updates known conversations as well as importing new ones. Native message IDs are retained separately from local message IDs so server history can merge without replacing recordings, attachment manifests, retry identities, or cached speech for unchanged replies. A changed assistant row invalidates its old speech cache. Refresh defers chats with pending local work and rechecks ownership/transcript state after network awaits.
 
 Saved transcripts are rendered immediately while foreground model and transcript refresh run concurrently. A delayed inventory response cannot block history synchronization; automatic opening/refresh activity does not replace cached content with a loading state. Existing ownership, local-work and post-await checks still govern history reconciliation.

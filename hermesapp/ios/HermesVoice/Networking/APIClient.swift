@@ -607,7 +607,19 @@ struct APIClient: Sendable {
         ])
         var request = try request(["api", "sessions", alias.session_id], method: "PATCH")
         request.httpBody = try JSONEncoder().encode(Body(title: title))
-        let receipt = try Self.decode(Receipt.self, from: await send(request))
+        let data: Data
+        do {
+            data = try await send(request)
+        } catch APIError.rejected(let status, let message)
+            where status == 400 && message.hasPrefix("Title '\(title)' is already in use by session ") {
+            // Preserve native title-based CLI lookup. A stable session suffix also
+            // makes interrupted publication safe to repeat without renaming again.
+            let suffix = " · \(alias.session_id)"
+            let prefix = String(String.UnicodeScalarView(title.unicodeScalars.prefix(max(0, 100 - suffix.unicodeScalars.count))))
+            request.httpBody = try JSONEncoder().encode(Body(title: prefix + suffix))
+            data = try await send(request)
+        }
+        let receipt = try Self.decode(Receipt.self, from: data)
         guard receipt.session.id == alias.session_id, let saved = receipt.session.title, !saved.isEmpty else {
             throw APIError.invalidResponse("Hermes did not save the shared chat title.")
         }

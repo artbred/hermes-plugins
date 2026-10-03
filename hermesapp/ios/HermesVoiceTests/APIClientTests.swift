@@ -13,6 +13,44 @@ struct APIClientTests {
         }}
         """
 
+    @Test("Only a confirmed title collision permits a second publication", arguments: [400, 401, 503])
+    func titlePublicationErrors(status: Int) async throws {
+        let server = StubServer { request in
+            if request.method == "GET" { return .json(200, #"{"session_id":"tip","data":[]}"#) }
+            return .json(status, #"{"detail":"Cannot update this session"}"#)
+        }
+        do {
+            _ = try await server.client().setSessionTitle(sessionID: "root", title: "Topic")
+            Issue.record("An unsuccessful title write was accepted")
+        } catch let error as APIError {
+            switch status {
+            case 401: #expect(error == .unauthorized)
+            case 503: #expect(error == .server(status: 503, message: "Cannot update this session"))
+            default: #expect(error == .rejected(status: 400, message: "Cannot update this session"))
+            }
+        }
+        #expect(server.requests.filter { $0.method == "PATCH" }.count == 1)
+    }
+
+    @Test("Collision suffix respects the native Unicode-scalar title limit")
+    func titleCollisionLength() async throws {
+        let title = String(repeating: "е\u{301}", count: 50)
+        let suffix = " · tip"
+        let expected = String(String.UnicodeScalarView(title.unicodeScalars.prefix(100 - suffix.unicodeScalars.count))) + suffix
+        let server = StubServer { request in
+            if request.method == "GET" { return .json(200, #"{"session_id":"tip","data":[]}"#) }
+            let body = try? JSONDecoder().decode([String: String].self, from: request.body)
+            if body?["title"] == title {
+                return .json(400, "{\"detail\":\"Title '\(title)' is already in use by session other\"}")
+            }
+            guard body?["title"] == expected else { return .json(400, #"{"detail":"Title length/content invalid"}"#) }
+            return .json(200, "{\"session\":{\"id\":\"tip\",\"title\":\"\(expected)\"}}")
+        }
+        let saved = try await server.client().setSessionTitle(sessionID: "root", title: title)
+        #expect(saved == expected)
+        #expect(saved.unicodeScalars.count == 100)
+    }
+
     @Test("Configured MoA presets are native routes while ordinary virtual aliases remain unavailable")
     func mixtureInventoryPresets() async throws {
         let server = StubServer { request in

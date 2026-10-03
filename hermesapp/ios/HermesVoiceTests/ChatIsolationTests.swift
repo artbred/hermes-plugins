@@ -144,6 +144,39 @@ struct ChatIsolationTests {
         }
     }
 
+    @Test("A duplicate shared title is disambiguated and persisted without regenerating it")
+    func sharedTitleCollision() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let title = "Приветствие и начало разговора"
+        let distinct = "\(title) · tip"
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("GET", "/api/sessions/root/messages"):
+                return .json(200, #"{"session_id":"tip","data":[]}"#)
+            case ("PATCH", "/api/sessions/tip"):
+                let body = try? JSONDecoder().decode([String: String].self, from: request.body)
+                if body?["title"] == title {
+                    return .json(400, "{\"detail\":\"Title '\(title)' is already in use by session other\"}")
+                }
+                guard body?["title"] == distinct else {
+                    return .json(400, #"{"detail":"Unexpected title"}"#)
+                }
+                return .json(200, "{\"session\":{\"id\":\"tip\",\"title\":\"\(distinct)\"}}")
+            default: return .json(404, #"{"detail":"Not found"}"#)
+            }
+        }
+        let store = ChatStore(directory: directory)
+        let chat = Chat(title: title, sessionID: "root", messages: [ChatMessage(role: .user, text: "Привет", stage: .completed)], titleGenerated: true, titleNeedsPublishing: true)
+        try store.save(chat)
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
+        model.scenePhaseChanged(.active)
+        try #require(await eventually { store.chat(id: chat.id)?.titleNeedsPublishing != true })
+        #expect(ChatStore(directory: directory).chat(id: chat.id)?.title == distinct)
+        #expect(model.connectionMessage == nil)
+        #expect(server.requests.filter { $0.path == "/api/voice/title" }.isEmpty)
+    }
+
     @Test("A failed shared-title write survives relaunch and retries without regenerating the title")
     func sharedTitleRetry() async throws {
         let directory = makeTemporaryDirectory()
