@@ -1,0 +1,8 @@
+name: fish-speech
+version: 1.0.0
+description: "Fish Audio speech for Hermes: TTS with per-reply language voice selection plus Fish ASR transcription."
+author: Artem + Hermes
+license: MIT
+kind: standalone
+requires_hermes: ">=0.21.3"
+tags: [tts, stt, fish-audio, voice]

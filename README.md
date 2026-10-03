@@ -2,6 +2,10 @@
 
 A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugins and the Hermes Voice iOS app. Additional independent plugins can be added under `plugins/`.
 
+## Active plugins
+
+- [fish-speech](plugins/fish-speech/) **1.0.0** — Fish Audio speech: TTS (`s2.1-pro`) with per-reply Jev language voice selection (Russian replies use the Russian reference voice) plus Fish ASR transcription. Registers `tts.provider: fish` and `stt.provider: fish`. Replaces the old `tts.providers.fish` command entry.
+
 ## Archived plugins — retired
 
 - [response-critic](plugins/response-critic/) **1.7.0** — Jev-controlled optional pre-delivery verification, high/max reasoning, persistent provider failure circuits, internal-notification guards and verified-note acknowledgments. Judge chain: Kimi → OpenRouter Muse Spark Contributor at the requested effort.
