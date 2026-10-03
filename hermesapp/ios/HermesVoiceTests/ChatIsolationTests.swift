@@ -24,7 +24,7 @@ struct ChatIsolationTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(sessionID: "shared", messages: [user, reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         await model.refreshChats()
         await model.refreshChats()
         let saved = try #require(store.chat(id: chat.id))
@@ -65,7 +65,7 @@ struct ChatIsolationTests {
         try Data([4, 5, 6]).write(to: store.audioURL(fileName: "reply.mp3"))
         let chat = Chat(sessionID: "shared", messages: [user, draft, final, next, repeated], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         await model.refreshChats()
         await model.refreshChats()
         let saved = try #require(store.chat(id: chat.id))
@@ -99,7 +99,7 @@ struct ChatIsolationTests {
         let store = ChatStore(directory: directory)
         var chat = Chat(sessionID: "shared", messages: [ChatMessage(id: "remote-shared-1", role: .user, text: "Earlier", stage: .completed)], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         let refresh = Task { await model.refreshChats() }
         try #require(await eventually { server.requests.contains { $0.path == "/api/sessions/shared/messages" } })
         chat.messages.append(ChatMessage(role: .user, text: "Unfinished local turn", stage: .running, runID: "pending"))
@@ -129,7 +129,7 @@ struct ChatIsolationTests {
         let chat = Chat(id: "middle", sessionID: "middle", sessionRootID: knownRoot ? "root" : nil, messages: [ChatMessage(id: "remote-middle-1", role: .user, text: "Earlier", stage: .completed)], titleGenerated: true)
         try store.save(chat)
         if hidden { try store.remove(id: chat.id) }
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         await model.refreshChats()
         await model.refreshChats()
         if hidden {
@@ -163,13 +163,13 @@ struct ChatIsolationTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(title: "A shared title", sessionID: "root", messages: [ChatMessage(role: .user, text: "Original", stage: .completed)], titleGenerated: true, titleNeedsPublishing: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         try #require(await eventually { model.connectionMessage != nil })
         #expect(store.chat(id: chat.id)?.titleNeedsPublishing == true)
         let restored = ChatStore(directory: directory)
         fail.withLock { $0 = false }
-        let relaunched = AppModel(store: restored, client: server.client())
+        let relaunched = AppModel(store: restored, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         relaunched.scenePhaseChanged(.active)
         try #require(await eventually { restored.chat(id: chat.id)?.titleNeedsPublishing != true })
         #expect(restored.chat(id: chat.id)?.title == "A shared title")
@@ -224,7 +224,7 @@ struct ChatIsolationTests {
         let b = Chat(title: "B", titleGenerated: true)
         try store.save(a)
         try store.save(b)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectChat(a.id)
         let importing = Task { await model.importAttachments([source]) }
         let started = await eventually { model.isImportingAttachments }
@@ -275,7 +275,7 @@ struct ChatIsolationTests {
         let store = ChatStore(directory: directory)
         var local = Chat(title: "Local A", messages: [ChatMessage(role: .user, text: "Original local message", stage: .completed)], titleGenerated: true)
         try store.save(local)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         let refresh = Task { await model.refreshChats() }
         let downloading = await eventually { server.requests.contains { $0.path == "/api/sessions/remote-a/messages" } }
         try #require(downloading)
@@ -313,7 +313,7 @@ struct ChatIsolationTests {
         let b = Chat(title: "B", messages: [ChatMessage(role: .user, text: "B work", stage: .running, runID: "b")], titleGenerated: true)
         try store.save(a)
         try store.save(b)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let bothActive = await eventually {
             server.requests.contains { $0.path == "/v1/runs/a" } && server.requests.contains { $0.path == "/v1/runs/b" }
@@ -359,7 +359,7 @@ struct ChatIsolationTests {
         let b = Chat(messages: [ChatMessage(role: .user, text: "B", stage: .running, runID: "b")], titleGenerated: true)
         try store.save(a)
         try store.save(b)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let bothWaiting = await eventually { model.pendingApproval(in: a.id) != nil && model.pendingApproval(in: b.id) != nil }
         try #require(bothWaiting)
@@ -397,7 +397,7 @@ struct ChatIsolationTests {
         let store = ChatStore(directory: directory)
         let local = Chat(messages: [ChatMessage(role: .user, text: "Pending local turn", stage: .running, runID: "fresh-run")], titleGenerated: true)
         try store.save(local)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         await model.refreshChats()
         #expect(store.chats.map(\.id) == [local.id])
         status.resolve(.json(200, #"{"run_id":"fresh-run","status":"completed","session_id":"fresh-run","output":"Finished original chat"}"#))

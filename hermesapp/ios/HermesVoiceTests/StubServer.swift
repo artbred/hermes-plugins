@@ -163,3 +163,8 @@ func eventually(timeout: Duration = .seconds(5), _ condition: () -> Bool) async 
     }
     return true
 }
+
+extension HermesModelChoice {
+    /// An explicit synthetic backend selection for tests unrelated to model picking.
+    static let testModel = HermesModelChoice(provider: "openrouter", modelID: "example/test-model", displayName: "Test model")
+}

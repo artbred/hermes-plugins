@@ -35,7 +35,7 @@ struct StopRunTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [ChatMessage(role: .user, input: .voice, text: "Wait for cancellation", stage: .running, runID: "stop-confirmation")], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let polling = await eventually { server.requests.contains { $0.path == "/v1/runs/stop-confirmation" } }
         try #require(polling)
@@ -88,7 +88,7 @@ struct StopRunTests {
         let message = ChatMessage(role: .user, text: "One turn only")
         let chat = Chat(messages: [message], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let submitting = await eventually { server.requests.contains { $0.path == "/v1/runs" } }
         try #require(submitting)
@@ -139,7 +139,7 @@ struct StopRunTests {
         let chat = Chat(messages: [ChatMessage(role: .user, text: "Finish normally", stage: .running, runID: "completion-race")], titleGenerated: true)
         try store.save(chat)
         let client = server.client()
-        let model = AppModel(store: store, client: client)
+        let model = AppModel(store: store, client: client, initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         model.stopRun()
         let completed = await eventually { store.chat(id: chat.id)?.messages.first?.stage == .completed }
@@ -182,7 +182,7 @@ struct StopRunTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [ChatMessage(role: .user, text: "Try stopping", stage: .running, runID: "retry-stop")], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         model.stopRun()
         let failed = await eventually { store.chat(id: chat.id)?.messages.first?.error != nil }
@@ -230,7 +230,7 @@ struct StopRunTests {
                                   submission: RunSubmission(input: "Original request", sessionID: "existing-session"))
         let chat = Chat(sessionID: "existing-session", messages: [message], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let connected = await eventually {
             model.liveResponse == "Partial reply" && server.requests.contains { $0.path == "/v1/runs/missing-status" }
@@ -317,7 +317,7 @@ struct StopRunTests {
         let other = Chat(messages: [ChatMessage(role: .user, text: "Keep running", stage: .running, runID: "unaffected-run")], titleGenerated: true)
         try store.save(missing)
         try store.save(other)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectChat(other.id)
         let otherConnected = await eventually { model.activeTool == "search" }
         try #require(otherConnected)
@@ -386,7 +386,7 @@ struct StopRunTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [ChatMessage(role: .user, text: "May still be running", stage: .running, runID: "uncertain-status")], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         if endpoint == "stop" { model.stopRun() }
         let failed = await eventually { store.chat(id: chat.id)?.messages.first?.error != nil }
@@ -442,7 +442,7 @@ struct StopRunTests {
         let message = ChatMessage(role: .user, text: "Recover this exact input")
         let chat = Chat(sessionID: "existing-session", messages: [message], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let submitted = await eventually { state.withLock { $0.admissions == 1 } }
         try #require(submitted)
@@ -458,7 +458,7 @@ struct StopRunTests {
         var continued = try #require(restored.chat(id: chat.id))
         continued.sessionID = "new-session-tip"
         try restored.save(continued)
-        let relaunched = AppModel(store: restored, client: server.client())
+        let relaunched = AppModel(store: restored, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         relaunched.scenePhaseChanged(.active)
         let interrupted = await eventually { restored.chat(id: chat.id)?.messages.first?.stage == .interrupted }
         try #require(interrupted)
@@ -486,7 +486,7 @@ struct StopRunTests {
         let chat = Chat(messages: [message], titleGenerated: true)
         try store.save(chat)
         let restored = ChatStore(directory: directory)
-        let model = AppModel(store: restored, client: server.client())
+        let model = AppModel(store: restored, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         model.stopRun()
         let interrupted = await eventually { restored.chat(id: chat.id)?.messages.first?.stage == .interrupted }
@@ -518,7 +518,7 @@ struct StopRunTests {
         let chat = Chat(messages: [first], titleGenerated: true)
         try store.save(chat)
         let client = server.client()
-        let model = AppModel(store: store, client: client)
+        let model = AppModel(store: store, client: client, initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let classifying = await eventually { server.requests.contains { $0.path == "/api/voice/classify" } }
         try #require(classifying)
@@ -553,7 +553,7 @@ struct StopRunTests {
         let message = ChatMessage(role: .user, input: .voice, text: "Keep this thought", classification: .brainDump)
         let chat = Chat(messages: [message], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let saving = await eventually { server.requests.contains { $0.path == "/api/voice/retain" } }
         try #require(saving)
@@ -593,7 +593,7 @@ struct StopRunTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [ChatMessage(role: .user, text: "Use a tool", stage: .running, runID: "tool-run")], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let started = await eventually { model.activeTool == "terminal" }
         try #require(started)
@@ -637,7 +637,7 @@ struct StopRunTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [ChatMessage(role: .user, text: "Use a tool", stage: .running, runID: "finished-tool")], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         let responding = await eventually { model.liveResponse == "Still responding" }
         try #require(responding)

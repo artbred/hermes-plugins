@@ -41,6 +41,15 @@ final class AppModel {
     var isComposerFocused = false
     var alert: AppAlert?
     private(set) var isRefreshing = false
+    var isLoadingModels = false
+    var modelSelectionError: String?
+    var composerFocusRequest = UUID()
+    private var availableModels: [HermesModelChoice] = []
+    @ObservationIgnored private var availableModelsByID: [String: HermesModelChoice] = [:]
+    private var preferredChatModel: HermesModelChoice?
+    @ObservationIgnored private var modelInventoryRevision = UUID()
+    @ObservationIgnored private var observedModelServerURL: String
+    @ObservationIgnored private var observedModelToken: String
     private var importingChatIDs: Set<String> = []
     private var importErrors: [String: String] = [:]
     private(set) var synthesizingMessageIDs: Set<String> = []
@@ -88,11 +97,16 @@ final class AppModel {
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var networkAvailable: Bool?
 
-    init(settings: AppSettings = AppSettings(), store: ChatStore = ChatStore(), recorder: Recorder = Recorder(), client: APIClient? = nil, notifications: ReplyNotifications? = nil) {
+    init(settings: AppSettings = AppSettings(), store: ChatStore = ChatStore(), recorder: Recorder = Recorder(), client: APIClient? = nil, notifications: ReplyNotifications? = nil, initialModelChoices: [HermesModelChoice] = [], initialModelChoice: HermesModelChoice? = nil) {
         clientOverride = client
         self.notifications = notifications ?? (client == nil ? .shared : nil)
         self.settings = settings
         observedSpeechVoice = settings.speechVoice
+        availableModels = initialModelChoices
+        availableModelsByID = Dictionary(initialModelChoices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        observedModelServerURL = settings.serverURL
+        observedModelToken = settings.token
+        preferredChatModel = initialModelChoice ?? settings.preferredChatModel
         self.store = store
         self.recorder = recorder
         selectedChatID = store.chats.first?.id
@@ -112,6 +126,78 @@ final class AppModel {
     }
 
     var selectedChat: Chat? { selectedChatID.flatMap(store.chat(id:)) }
+    var selectedChatModel: HermesModelChoice? {
+        guard let selected = selectedChat?.modelChoice ?? preferredChatModel else { return nil }
+        return availableModelsByID[selected.id] ?? selected
+    }
+    var modelChoices: [HermesModelChoice] {
+        guard !availableModels.isEmpty else { return [] }
+        var choices: [HermesModelChoice] = []
+        choices.reserveCapacity(min(5, availableModels.count))
+        var seen = Set<String>()
+        seen.reserveCapacity(5)
+        func append(_ candidate: HermesModelChoice?) {
+            guard choices.count < 5, let candidate,
+                  let available = availableModelsByID[candidate.id], seen.insert(candidate.id).inserted else { return }
+            choices.append(available)
+        }
+        append(selectedChatModel)
+        // ChatStore already keeps chats in descending activity order.
+        for chat in store.chats {
+            if choices.count == 5 { break }
+            append(chat.modelChoice)
+        }
+        for available in availableModels {
+            if choices.count == 5 { break }
+            append(available)
+        }
+        return choices
+    }
+    var canChangeModel: Bool { !isBusy && !isRecordingInProgress && !isImportingAttachments }
+    var canStartNewChat: Bool { !isRecordingInProgress }
+    var canFocusComposer: Bool { !isRecordingInProgress && !startWhenActive && !isChatsPresented && !isSettingsPresented }
+
+    func refreshModelChoices() async {
+        guard !isLoadingModels, let client = makeClient() else { return }
+        let revision = modelInventoryRevision
+        isLoadingModels = true
+        defer { if revision == modelInventoryRevision { isLoadingModels = false } }
+        do {
+            let choices = try await client.modelChoices()
+            guard !Task.isCancelled, revision == modelInventoryRevision else { return }
+            availableModels = choices
+            availableModelsByID = Dictionary(choices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            if choices.isEmpty {
+                modelSelectionError = "Hermes has no available chat models. Configure a provider before sending."
+            } else if let selected = selectedChatModel, availableModelsByID[selected.id] == nil {
+                modelSelectionError = "This model is no longer available. Choose another model."
+            } else {
+                modelSelectionError = nil
+            }
+        } catch {
+            guard !Task.isCancelled, revision == modelInventoryRevision else { return }
+            modelSelectionError = "Could not load Hermes models: \(error.localizedDescription)"
+        }
+    }
+
+    func selectChatModel(_ choice: HermesModelChoice) {
+        guard canChangeModel, let choice = availableModelsByID[choice.id] else { return }
+        let previousPreference = settings.preferredChatModel
+        do {
+            try settings.savePreferredChatModel(choice)
+            do {
+                if var chat = selectedChat {
+                    chat.modelChoice = choice
+                    try store.save(chat)
+                }
+            } catch {
+                try settings.savePreferredChatModel(previousPreference)
+                throw error
+            }
+            preferredChatModel = choice
+            modelSelectionError = nil
+        } catch { show(error, title: "Could not save model selection") }
+    }
     var isBusy: Bool { selectedChat?.hasPendingMessages == true }
     /// A take is recording, or its microphone session is still activating.
     private var isRecordingInProgress: Bool { recorder.isRecording || isStartingRecording }
@@ -131,7 +217,8 @@ final class AppModel {
     var isImportingAttachments: Bool { selectedChatID.map { importingChatIDs.contains($0) } ?? false }
     var attachmentImportError: String? { selectedChatID.flatMap { importErrors[$0] } }
     var canSend: Bool {
-        !isBusy && !recorder.isRecording && !isImportingAttachments
+        !isBusy && !isRecordingInProgress && !isImportingAttachments
+            && selectedChatModel.map { availableModelsByID[$0.id] != nil } == true
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty)
     }
 
@@ -174,16 +261,18 @@ final class AppModel {
         } catch { show(error, title: "Could not remove file") }
     }
 
-    func newChat() {
+    func newChat(focusComposer: Bool = true) {
         if isRecordingInProgress { discardRecording() }
         if let selectedChatID { drafts[selectedChatID] = draft }
-        let chat = Chat()
+        var chat = Chat()
+        chat.modelChoice = preferredChatModel
         do {
             try store.save(chat)
             selectedChatID = chat.id
             draft = ""
             isChatsPresented = false
             stopPlayback()
+            if focusComposer { composerFocusRequest = UUID() }
         } catch { show(error, title: "Could not create chat") }
     }
 
@@ -195,6 +284,7 @@ final class AppModel {
         draft = drafts[id] ?? ""
         isChatsPresented = false
         stopPlayback()
+        if selectedChat?.messages.isEmpty == true { composerFocusRequest = UUID() }
         resumePending()
     }
 
@@ -225,9 +315,15 @@ final class AppModel {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRecordingInProgress, !isImportingAttachments,
               !text.isEmpty || !pendingAttachments.isEmpty else { return }
-        if selectedChat == nil { newChat() }
+        guard let choice = selectedChatModel, availableModelsByID[choice.id] != nil else {
+            show(ChatError.modelNotSelected, title: "Choose a chat model")
+            return
+        }
+        if selectedChat == nil { newChat(focusComposer: false) }
         guard var chat = selectedChat, !chat.hasPendingMessages else { return }
-        chat.messages.append(ChatMessage(role: .user, text: text, attachments: chat.draftAttachments))
+        var message = ChatMessage(role: .user, text: text, attachments: chat.draftAttachments)
+        message.modelChoice = choice
+        chat.messages.append(message)
         chat.draftAttachments = nil
         chat.updatedAt = .now
         do {
@@ -246,7 +342,7 @@ final class AppModel {
         guard !isStartingRecording, !startWhenActive else { return }
         isSettingsPresented = false
         isChatsPresented = false
-        newChat()
+        newChat(focusComposer: false)
         guard selectedChat?.messages.isEmpty == true else { return }
         if UIApplication.shared.applicationState != .active {
             startWhenActive = true
@@ -257,7 +353,7 @@ final class AppModel {
 
     func startRecording() async {
         guard !isRecordingInProgress, !isBusy, !isImportingAttachments else { return }
-        if selectedChat == nil { newChat() }
+        if selectedChat == nil { newChat(focusComposer: false) }
         guard let chatID = selectedChatID else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
@@ -300,7 +396,9 @@ final class AppModel {
 
     private func enqueue(_ recording: Recording) {
         guard let chatID = recordingChatID, var chat = store.chat(id: chatID) else { return }
-        chat.messages.append(ChatMessage(id: recording.id, role: .user, input: .voice, text: "", createdAt: recording.startedAt, audioFileName: recording.url.lastPathComponent, attachments: chat.draftAttachments, recordingDuration: recording.duration))
+        var message = ChatMessage(id: recording.id, role: .user, input: .voice, text: "", createdAt: recording.startedAt, audioFileName: recording.url.lastPathComponent, attachments: chat.draftAttachments, recordingDuration: recording.duration)
+        message.modelChoice = chat.modelChoice ?? preferredChatModel
+        chat.messages.append(message)
         chat.draftAttachments = nil
         chat.updatedAt = .now
         do {
@@ -323,6 +421,10 @@ final class AppModel {
                     $0.runID = nil
                     $0.runWasTerminal = false
                     $0.submission = nil
+                    $0.modelChoice = chat.modelChoice ?? preferredChatModel
+                }
+                if $0.submission == nil, $0.runID == nil, $0.modelChoice == nil {
+                    $0.modelChoice = chat.modelChoice ?? preferredChatModel
                 }
                 $0.error = nil
                 $0.stopRequested = nil
@@ -446,6 +548,16 @@ final class AppModel {
     func settingsChanged() {
         refreshSpeechSelection()
         connectionMessage = nil
+        if observedModelServerURL != settings.serverURL || observedModelToken != settings.token {
+            observedModelServerURL = settings.serverURL
+            observedModelToken = settings.token
+            modelInventoryRevision = UUID()
+            availableModels = []
+            availableModelsByID = [:]
+            isLoadingModels = false
+            modelSelectionError = nil
+            Task { await refreshModelChoices() }
+        }
         resumePending()
         Task { await notifications?.refresh(client: makeClient()) }
     }
@@ -559,6 +671,11 @@ final class AppModel {
                 return
             }
             if message.submission == nil {
+                if availableModels.isEmpty { await refreshModelChoices() }
+                try checkWorker(chatID, workerID)
+                guard let choice = message.modelChoice ?? store.chat(id: chatID)?.modelChoice ?? preferredChatModel,
+                      availableModelsByID[choice.id] != nil else { throw ChatError.modelNotSelected }
+                message.modelChoice = choice
                 for index in message.files.indices where message.files[index].remotePath == nil {
                     let file = message.files[index]
                     try updateMessage(chatID, message.id) { $0.stage = .uploading; $0.error = nil }
@@ -569,9 +686,14 @@ final class AppModel {
                     try updateMessage(chatID, message.id) { $0.attachments = message.attachments }
                 }
                 guard let chat = store.chat(id: chatID) else { throw CancellationError() }
-                message.submission = RunSubmission(input: try message.agentInput(), sessionID: chat.sessionID,
-                                                   instructions: MobileResponseFormat.instructions, sessionKey: chat.sessionKey)
-                try updateMessage(chatID, message.id) { $0.submission = message.submission }
+                var submission = RunSubmission(input: try message.agentInput(), sessionID: chat.sessionID,
+                                               instructions: MobileResponseFormat.instructions, sessionKey: chat.sessionKey)
+                submission.modelChoice = message.modelChoice
+                message.submission = submission
+                try updateMessage(chatID, message.id) {
+                    $0.modelChoice = message.modelChoice
+                    $0.submission = submission
+                }
             }
             guard let chat = store.chat(id: chatID) else { throw CancellationError() }
             try updateMessage(chatID, message.id) { $0.stage = .submitting; $0.error = nil }
@@ -586,7 +708,7 @@ final class AppModel {
                 message.replyNotificationRequested = true
                 try updateMessage(chatID, message.id) { $0.replyNotificationRequested = true }
             }
-            let receipt = try await client.startRun(text: submission.input, sessionKey: sessionKey, sessionID: submission.sessionID, idempotencyKey: message.requestKey, push: push, instructions: submission.instructions)
+            let receipt = try await client.startRun(text: submission.input, sessionKey: sessionKey, sessionID: submission.sessionID, idempotencyKey: message.requestKey, push: push, instructions: submission.instructions, modelChoice: submission.modelChoice)
             // Never let an old cancelled callback overwrite a replacement worker. The
             // persisted submission lets that worker recover this same run idempotently.
             guard workerIDs[chatID] == workerID else { throw CancellationError() }
@@ -892,6 +1014,7 @@ final class AppModel {
 
     /// Owned by RootView's foreground task; SwiftUI cancels it on suspension.
     func synchronizeChats() async {
+        await refreshModelChoices()
         while !Task.isCancelled {
             await refreshChats()
             do { try await Task.sleep(for: .seconds(15)) }
@@ -1060,12 +1183,13 @@ final class AppModel {
 }
 
 private enum ChatError: LocalizedError {
-    case missingRecording, noSpeech, notConfigured
+    case missingRecording, noSpeech, notConfigured, modelNotSelected
     var errorDescription: String? {
         switch self {
         case .missingRecording: "The recording file is missing. Record your message again."
         case .noSpeech: "No speech was detected. Record your message again, or type it instead."
         case .notConfigured: "Connect your Hermes server in Settings to generate speech."
+        case .modelNotSelected: "Choose an available model in the chat header before sending. Hermes’s global default is never selected automatically."
         }
     }
 }

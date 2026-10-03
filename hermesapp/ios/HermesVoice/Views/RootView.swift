@@ -7,45 +7,25 @@ struct RootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @State private var reviewedApproval: RunApproval?
+    @State private var isModelPickerPresented = false
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 NavigationStack {
-                    ChatScreen(model: model) { approval in
+                    ChatScreen(model: model, isModelPickerPresented: isModelPickerPresented) { approval in
                         dismissKeyboard()
                         reviewedApproval = approval
                     }
-                        .id(model.selectedChatID)
-                        // Keep this outside the changing identity so menu dismissal cannot
-                        // animate an outgoing transcript together with the newly selected chat.
+                        // Changing transcripts from the sidebar must not animate the
+                        // outgoing conversation or recreate the composer's focus state.
                         .transaction(value: model.selectedChatID) {
                             $0.animation = nil
                             $0.disablesAnimations = true
                         }
-                        .navigationTitle("Hermes")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbarBackground(.hidden, for: .navigationBar)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    dismissKeyboard()
-                                    withAnimation(menuAnimation) { model.isChatsPresented = true }
-                                } label: {
-                                    Image(systemName: "line.3.horizontal")
-                                }
-                                .accessibilityLabel("Chats")
-                                .accessibilityIdentifier("chatsButton")
-                            }
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button { model.newChat() } label: {
-                                    Image(systemName: "square.and.pencil")
-                                }
-                                .disabled(model.recorder.isRecording)
-                                .accessibilityLabel("New chat")
-                                .accessibilityIdentifier("newChatButton")
-                            }
-                        }
+                        .toolbar { chatToolbar }
                         .navigationDestination(isPresented: $model.isSettingsPresented) {
                             SettingsView(model: model)
                         }
@@ -104,6 +84,9 @@ struct RootView: View {
         .sheet(item: $reviewedApproval) { approval in
             ApprovalView(model: model, approval: approval)
         }
+        .sheet(isPresented: $isModelPickerPresented) {
+            ChatModelPicker(model: model)
+        }
         .alert(
             model.alert?.title ?? "",
             isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } }),
@@ -127,6 +110,78 @@ struct RootView: View {
         }
     }
 
+    @ToolbarContentBuilder
+    private var chatToolbar: some ToolbarContent {
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .topBarLeading) { headerLeading }
+                .sharedBackgroundVisibility(.hidden)
+            ToolbarItem(placement: .topBarTrailing) { newChatButton }
+                .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .topBarLeading) { headerLeading }
+            ToolbarItem(placement: .topBarTrailing) { newChatButton }
+        }
+    }
+
+    private var headerLeading: some View {
+        HStack(spacing: 16) {
+            Button {
+                dismissKeyboard()
+                withAnimation(menuAnimation) { model.isChatsPresented = true }
+            } label: {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body.weight(.medium))
+                    .frame(width: 44, height: 44)
+                    .background(HermesPalette.control(colorScheme), in: Circle())
+                    .overlay(Circle().strokeBorder(.primary.opacity(0.08), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Chats")
+            .accessibilityIdentifier("chatsButton")
+
+            Button {
+                dismissKeyboard()
+                isModelPickerPresented = true
+            } label: {
+                HStack(spacing: 7) {
+                    Text(model.selectedChatModel?.displayName ?? "Choose model")
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    if model.isLoadingModels {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: model.modelSelectionError == nil ? "chevron.down" : "exclamationmark.circle")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canChangeModel)
+            .accessibilityLabel("Choose chat model")
+            .accessibilityValue(model.selectedChatModel?.displayName ?? "No model selected")
+            .accessibilityHint(model.modelSelectionError ?? (model.isLoadingModels ? "Loading available models" : "Select a model for new messages"))
+            .accessibilityIdentifier("chatModelButton")
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var newChatButton: some View {
+        Button { model.newChat() } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.body.weight(.medium))
+                .frame(width: 44, height: 44)
+                .background(HermesPalette.control(colorScheme), in: Circle())
+                .overlay(Circle().strokeBorder(.primary.opacity(0.08), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!model.canStartNewChat)
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("newChatButton")
+    }
+
     private var menuAnimation: Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.24)
     }
@@ -144,6 +199,97 @@ struct RootView: View {
 
     private func dismissKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
+private struct ChatModelPicker: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if model.isLoadingModels {
+                    ProgressView("Loading models…")
+                        .accessibilityIdentifier("chatModelsLoading")
+                }
+                if let error = model.modelSelectionError {
+                    Section {
+                        Label("Couldn’t load models", systemImage: "exclamationmark.triangle")
+                            .font(.headline)
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityIdentifier("chatModelsError")
+                }
+                if !model.modelChoices.isEmpty {
+                    Section {
+                        ForEach(Array(model.modelChoices.prefix(5))) { choice in
+                            Button {
+                                model.selectChatModel(choice)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 16) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(choice.displayName)
+                                            .font(.body.weight(.medium))
+                                        Text("\(choice.provider) · \(choice.modelID)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    if model.selectedChatModel?.id == choice.id {
+                                        Image(systemName: "checkmark")
+                                            .font(.body.weight(.semibold))
+                                            .foregroundStyle(.tint)
+                                            .accessibilityHidden(true)
+                                    }
+                                }
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!model.canChangeModel)
+                            .accessibilityValue(model.selectedChatModel?.id == choice.id ? "Selected" : "")
+                            .accessibilityIdentifier("chatModel-\(choice.id)")
+                        }
+                    } footer: {
+                        Text("The selected model is used for new messages in this chat.")
+                    }
+                } else if !model.isLoadingModels && model.modelSelectionError == nil {
+                    Text("No selectable models are available from this server.")
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("chatModelsEmpty")
+                }
+                Section {
+                    Button {
+                        Task { await model.refreshModelChoices() }
+                    } label: {
+                        Label(model.modelSelectionError == nil ? "Refresh models" : "Retry", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(model.isLoadingModels || !model.canChangeModel)
+                    .accessibilityIdentifier("refreshChatModelsButton")
+                }
+            }
+            .navigationTitle("Choose model")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+        .presentationDragIndicator(.visible)
+        .task {
+            if model.modelChoices.isEmpty && !model.isLoadingModels && model.modelSelectionError == nil {
+                await model.refreshModelChoices()
+            }
+        }
     }
 }
 
@@ -201,6 +347,7 @@ private struct ChatScrollAppearance: ViewModifier {
 
 private struct ChatScreen: View {
     @Bindable var model: AppModel
+    let isModelPickerPresented: Bool
     let reviewApproval: (RunApproval) -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -238,15 +385,13 @@ private struct ChatScreen: View {
             if let chat = model.selectedChat, !chat.messages.isEmpty {
                 ChatTranscript(model: model, chat: chat, reviewApproval: reviewApproval)
                     .id(chat.id)
-            } else if model.isComposerFocused || model.recorder.isRecording {
-                Color.clear.accessibilityIdentifier("emptyChat")
             } else {
-                welcome
+                Color.clear.accessibilityIdentifier("emptyChat")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ComposerView(model: model)
+            ComposerView(model: model, isModelPickerPresented: isModelPickerPresented)
         }
         // Keep the gradient attached to the keyboard-avoiding chat viewport, not the full-screen base color.
         .background {
@@ -255,14 +400,14 @@ private struct ChatScreen: View {
                 LinearGradient(
                     colors: [
                         .clear,
-                        Color.indigo.opacity(colorScheme == .dark ? 0.10 : 0.035),
-                        Color.blue.opacity(colorScheme == .dark ? 0.13 : 0.045),
+                        Color.indigo.opacity(colorScheme == .dark ? 0.14 : 0.035),
+                        Color.blue.opacity(colorScheme == .dark ? 0.20 : 0.06),
                         HermesPalette.chatAccent(colorScheme)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 280)
+                .frame(height: 320)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea(.container, edges: .bottom)
@@ -279,31 +424,6 @@ private struct ChatScreen: View {
                 .overlay(HermesPalette.chatAccent(colorScheme))
                 .ignoresSafeArea()
         }
-    }
-
-    private var welcome: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: 16) {
-                    Image(systemName: "sparkle")
-                        .font(.system(size: 32, weight: .light))
-                        .foregroundStyle(
-                            LinearGradient(colors: [.blue, .indigo, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
-                        .accessibilityHidden(true)
-                    Text("How can I help?")
-                        .font(.largeTitle.weight(.medium))
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: max(0, geometry.size.height - 64))
-                .padding(.horizontal, 24)
-                .padding(.vertical, 32)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .modifier(ChatScrollAppearance())
-        }
-        .accessibilityIdentifier("emptyChat")
     }
 
 }

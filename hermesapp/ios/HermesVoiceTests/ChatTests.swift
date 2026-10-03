@@ -46,7 +46,7 @@ struct ChatTests {
             }
         }
         let store = ChatStore(directory: directory)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.sendText("Find David Beckham's healthy drink delivery subscription and product links.")
         let chatID = try #require(model.selectedChatID)
         let early = await eventually { store.chat(id: chatID)?.titleGenerated == true }
@@ -90,7 +90,7 @@ struct ChatTests {
             }
         }
         let store = ChatStore(directory: directory)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.sendText("Design an Excel tracker for monthly household expenses and budget categories.")
         let originalID = try #require(model.selectedChatID)
         try #require(await eventually { store.chat(id: originalID)?.sessionID == "shared" })
@@ -131,7 +131,7 @@ struct ChatTests {
         try Data([1, 2, 3]).write(to: store.audioURL(fileName: "input.m4a"))
         let chat = Chat(messages: [message])
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         try #require(await eventually { store.chat(id: chat.id)?.titleGenerated == true })
         #expect(store.chat(id: chat.id)?.messages.first?.stage == .classifying)
@@ -174,7 +174,7 @@ struct ChatTests {
             default: return .json(404, #"{"detail":"Not found"}"#)
             }
         }
-        let model = AppModel(store: restored, client: server.client())
+        let model = AppModel(store: restored, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         try #require(await eventually { restored.chat(id: migrated.id)?.messages.last?.text == "Recovered" })
         await model.refreshChats()
@@ -252,7 +252,7 @@ struct ChatTests {
         if let voiceFile { try Data([1]).write(to: store.audioURL(fileName: voiceFile)) }
         let chat = Chat(messages: [ChatMessage(role: .user, input: input, text: input == .voice ? "" : "What is seven plus five?", audioFileName: voiceFile)])
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil // Do not play into the test host's shared audio session.
         model.scenePhaseChanged(.active)
         #expect(await eventually { store.chat(id: chat.id)?.messages.last?.role == .assistant })
@@ -295,7 +295,7 @@ struct ChatTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(sessionID: "existing-chat", messages: [ChatMessage(role: .user, text: "Continue", stage: .running, runID: "already-accepted")])
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         #expect(await eventually { store.chat(id: chat.id)?.messages.last?.text == "Finished while you were away." })
         #expect(server.requests.filter { $0.method == "POST" && $0.path == "/v1/runs" }.isEmpty)
@@ -320,7 +320,7 @@ struct ChatTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [message])
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         #expect(await eventually { store.chat(id: chat.id)?.titleGenerated == true })
         let saved = try #require(store.chat(id: chat.id))
@@ -357,7 +357,7 @@ struct ChatTests {
         let store = ChatStore(directory: directory)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
         await model.play(reply)
         let request = try #require(server.requests.first { $0.path == "/api/audio/speak" })
@@ -394,7 +394,7 @@ struct ChatTests {
         let chat = Chat(sessionID: "old-session", messages: [message], titleGenerated: true)
         try store.save(chat)
         let restored = ChatStore(directory: directory)
-        let model = AppModel(store: restored, client: server.client())
+        let model = AppModel(store: restored, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
         #expect(await eventually { restored.chat(id: chat.id)?.messages.first?.stage == .completed })
         #expect(restored.chat(id: chat.id)?.messages.last?.text == "Original result")

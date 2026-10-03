@@ -22,6 +22,18 @@ Only expose the routes needed by the client. Dashboard/provider credentials are 
 
 Empty objects fail request validation before any speech inference. A GET probe is insufficient: the current dashboard's SPA fallback answers `404`, not `405`, for these POST-only routes.
 
+## Chat model inventory and selection
+
+`GET /api/model/options` uses the same native Bearer authentication as runs and returns the configured picker inventory, not the virtual gateway aliases from `/v1/models`. Example:
+
+```json
+{"model":"server-global-default","provider":"server-global-provider","providers":[{"slug":"openrouter","authenticated":true,"models":["google/gemini-3.7-flash","openai/gpt-5.4"],"featured_models":["google/gemini-3.7-flash"],"unavailable_models":[]}]}
+```
+
+The top-level model/provider are server-global metadata and are never used as a phone selection. Provider `slug` and exact model ID form the request identity; display labels are derived only for presentation. Only authenticated, usable inventories are offered: virtual/unconfigured/native-empty/entitlement-pending rows and unavailable/reserved model IDs are excluded. Eligible featured models are ranked before remaining inventory, without hardcoding a model list. The header presents at most five deduplicated identities, prioritizing the current chat and validated recent local selections. Selection is per chat, with the last explicit preference persisted independently of connection/speech settings for new chats. No saved choice means **Choose model** and no agent admission until a choice is made.
+
+`models/hermes-models.yml` is the **deferred** Traefik artifact: current-host GET only, exact `/api/model/options`, forwarded to the native API listener so native authentication still runs. It exposes no dashboard administration and changes no provider/global model configuration. Active-host deployment is awaiting explicit authorization; an unavailable route shows a model-loading error and Retry rather than a fabricated catalog or global-default fallback. A compatible Hermes API must support both model options and explicit per-run provider/model overrides.
+
 ## Full agent turns
 
 ### `POST /v1/runs`
@@ -34,12 +46,14 @@ Idempotency-Key: <local-message-id>-<attempt>
 ```
 
 ```json
-{"input":"What should we do next?","session_id":"previous-native-session-id","instructions":"Return a self-contained mobile HTML fragment, not Markdown."}
+{"input":"What should we do next?","session_id":"previous-native-session-id","instructions":"Return a self-contained mobile HTML fragment, not Markdown.","provider":"openrouter","model":"google/gemini-3.7-flash"}
 ```
 
 Omit `session_id` for the first turn. The stable session key associates subsequent requests with the same conversation. Once known, the explicit native session ID is sent; Hermes follows its compression continuation and loads server-owned history. The app does not resend the complete transcript.
 
 `instructions` is the native per-run system-prompt extension, not part of the user's text. The abbreviated example above illustrates the field; new mobile requests send the complete [`MobileResponseFormat.instructions`](../ios/HermesVoice/Rendering/MobileResponseFormat.swift) contract. Other native clients and the server's global prompt are unchanged. The app freezes `instructions` alongside `input` and `session_id` before admission; uncertain requests saved by older builds continue to omit it, preserving their original idempotency fingerprint.
+
+Every new prepared run includes the concrete selected `provider` and `model`. The choice is captured on the queued user message before asynchronous upload/transcription work and persisted again in `RunSubmission`; changing another chat or the preferred model cannot change an in-flight request. The native run handler translates those fields to `requested_provider`/`requested_model` without changing global Hermes configuration. Existing native session/model locks may reject incompatible choices; errors remain visible instead of silently substituting a default. Only previously frozen legacy requests without model fields continue omitting them during lost-admission recovery, preserving their original idempotency fingerprint.
 
 Response: `202 {"run_id":"run_...","status":"started","replayed":false}`. The admission receipt need not contain a session ID; obtain it from status.
 

@@ -20,7 +20,7 @@ struct VoicePlaybackTests {
         let message = ChatMessage(role: .user, input: .voice, text: "My original words", stage: .completed, audioFileName: name)
         let chat = Chat(messages: [message], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         defer { model.stopPlayback() }
 
         await model.play(message)
@@ -55,7 +55,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, input: input, text: "The assistant reply", stage: .completed, audioFileName: "reply.wav", speechVoice: voice, speechGeneralVoice: voice)
         let chat = Chat(messages: [user, reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         defer { model.stopPlayback() }
 
         await model.play(reply)
@@ -108,7 +108,7 @@ struct VoicePlaybackTests {
                                 text: "<p>Привет, мир.</p><script>hidden()</script>", stage: .completed, needsSpeech: automatic)
         let chat = Chat(messages: [original, reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         defer { model.stopPlayback() }
         model.selectedChatID = nil
         if automatic {
@@ -150,7 +150,7 @@ struct VoicePlaybackTests {
         let restoredSettings = AppSettings(service: service)
         let restoredStore = ChatStore(directory: directory)
         let offline = StubServer { _ in .json(500, #"{"error":"Cached audio must not use the network"}"#) }
-        let relaunched = AppModel(settings: restoredSettings, store: restoredStore, client: offline.client())
+        let relaunched = AppModel(settings: restoredSettings, store: restoredStore, client: offline.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         defer { relaunched.stopPlayback() }
         #expect(restoredSettings.speechVoice == general)
         #expect(restoredStore.chat(id: chat.id)?.messages.last == saved)
@@ -180,7 +180,7 @@ struct VoicePlaybackTests {
                                 audioFileName: "old.wav", speechVoice: .russianVoice, speechGeneralVoice: oldGeneral)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         defer { model.stopPlayback() }
         await model.play(reply)
         if paused { await model.play(reply) }
@@ -239,7 +239,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "A visible reply.", stage: .completed)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
         await model.play(reply)
         let saved = try #require(store.chat(id: chat.id)?.messages.last)
@@ -268,7 +268,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "Answer", stage: .completed)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
         let listen = Task { await model.play(reply) }
         defer { listen.cancel() }
@@ -303,7 +303,7 @@ struct VoicePlaybackTests {
                                 audioFileName: "old.wav", speechVoice: .russianVoice, speechGeneralVoice: general)
         var chat = Chat(sessionID: "shared", messages: [original, reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
         let replacement = try JSONDecoder().decode([RemoteMessage].self, from: Data(#"[{"id":1,"role":"user","content":"Question"},{"id":2,"role":"assistant","content":"<p>Updated answer.</p><script>not prose</script>"}]"#.utf8))
         chat.mergeHistory(replacement, sessionID: "shared")
@@ -358,7 +358,7 @@ struct VoicePlaybackTests {
                                 audioFileName: "old.wav", speechVoice: cachedVoice, speechGeneralVoice: cachedVoice == voice ? nil : voice, needsSpeech: automatic)
         let chat = Chat(messages: [recording, reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
 
         if automatic {
@@ -408,7 +408,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "Answer", stage: .completed, audioFileName: "old.wav", speechVoice: other)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
 
         await model.play(reply)
@@ -458,7 +458,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "Answer", stage: .completed)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         let listen = Task { await model.play(reply) }
         defer {
             response.resolve(pendingSelection ? Self.selectionResponse(voice: original) : Self.speechResponse(voice: original, audio: audio))
@@ -523,7 +523,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, input: .voice, text: "Answer", stage: .completed, needsSpeech: true)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
         model.scenePhaseChanged(.active)
         try #require(await eventually { server.requests.count == (pendingSelection ? 1 : 2) })
@@ -557,7 +557,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "Answer", stage: .completed, audioFileName: "reply.wav", speechVoice: settings.speechVoice, speechGeneralVoice: settings.speechVoice)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         defer { model.stopPlayback() }
         model.draft = "Keep this draft"
         await model.play(reply)
@@ -586,7 +586,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "Answer", stage: .completed, audioFileName: "reply.wav", speechVoice: settings.speechVoice, speechGeneralVoice: settings.speechVoice)
         let chat = Chat(messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         let gate = DispatchSemaphore(value: 0)
         AudioSession.queue.async { gate.wait() }
         let listen = Task { await model.play(reply) }
@@ -622,7 +622,7 @@ struct VoicePlaybackTests {
         let index = directory.appending(path: "chats.json")
         try FileManager.default.removeItem(at: index)
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
 
         await model.play(reply)
@@ -659,7 +659,7 @@ struct VoicePlaybackTests {
         let reply = ChatMessage(role: .assistant, text: "Original answer", stage: .completed, remoteMessageID: "1")
         var chat = Chat(sessionID: "shared", messages: [reply], titleGenerated: true)
         try store.save(chat)
-        let model = AppModel(settings: settings, store: store, client: server.client())
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectedChatID = nil
         let listen = Task { await model.play(reply) }
         defer { response.resolve(oldResult); listen.cancel() }

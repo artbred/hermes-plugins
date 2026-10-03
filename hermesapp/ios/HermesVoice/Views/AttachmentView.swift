@@ -3,15 +3,23 @@ import UniformTypeIdentifiers
 
 enum HermesPalette {
     static func background(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0.035, green: 0.039, blue: 0.047) : Color(red: 0.985, green: 0.985, blue: 0.995)
+        scheme == .dark ? .black : Color(red: 0.985, green: 0.985, blue: 0.995)
     }
 
     static func chatAccent(_ scheme: ColorScheme) -> Color {
-        Color.purple.opacity(scheme == .dark ? 0.15 : 0.06)
+        scheme == .dark
+            ? Color(red: 0.11, green: 0.15, blue: 0.37)
+            : Color(red: 0.87, green: 0.90, blue: 0.985)
     }
 
     static func control(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0.14, green: 0.145, blue: 0.16) : Color(red: 0.925, green: 0.93, blue: 0.95)
+        scheme == .dark ? Color(red: 0.105, green: 0.11, blue: 0.12) : Color(red: 0.925, green: 0.93, blue: 0.95)
+    }
+
+    static func actionAccent(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(red: 0.16, green: 0.20, blue: 0.51)
+            : Color(red: 0.18, green: 0.28, blue: 0.78)
     }
 
     static func menu(_ scheme: ColorScheme) -> Color {

@@ -15,7 +15,7 @@ struct ReplyNotificationTests {
         try store.save(a)
         try store.save(b)
         let server = StubServer { _ in .json(404, #"{"detail":"Not found"}"#) }
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectChat(b.id)
         let mismatched = try #require(ReplyNotification(userInfo: ["kind": "hermes_reply", "chat_id": b.id, "run_id": "run-a"]))
         model.receivedReplyNotification(mismatched, openChat: true)
@@ -38,7 +38,7 @@ struct ReplyNotificationTests {
         try store.save(a)
         try store.save(b)
         let server = StubServer { _ in .json(404, #"{"detail":"Not found"}"#) }
-        let model = AppModel(store: store, client: server.client())
+        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectChat(b.id)
         let notification = try #require(ReplyNotification(userInfo: ["kind": "hermes_reply", "chat_id": a.id, "run_id": "run-a"]))
         model.receivedReplyNotification(notification, openChat: false)
@@ -71,7 +71,7 @@ struct ReplyNotificationTests {
                 return .json(404, #"{"detail":"Not found"}"#)
             }
         }
-        let model = AppModel(store: restored, client: server.client())
+        let model = AppModel(store: restored, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.inactive)
         model.selectedChatID = otherChat.id
         model.isSettingsPresented = true

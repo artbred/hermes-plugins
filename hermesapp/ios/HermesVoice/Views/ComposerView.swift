@@ -4,12 +4,14 @@ import UniformTypeIdentifiers
 
 struct ComposerView: View {
     @Bindable var model: AppModel
+    let isModelPickerPresented: Bool
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isImporterPresented = false
     @State private var previewURL: URL?
+    @State private var handledFocusRequest: UUID?
 
     private var hasInput: Bool {
         !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -65,7 +67,7 @@ struct ComposerView: View {
                                     stopButton
                                 } else {
                                     voiceButton
-                                    sendButton
+                                    if hasInput { sendButton }
                                 }
                             }
                         }
@@ -83,14 +85,15 @@ struct ComposerView: View {
                         }
                     }
                 }
-                .padding(8)
-                .background(HermesPalette.control(colorScheme), in: RoundedRectangle(cornerRadius: 30))
+                .padding(.horizontal, 12)
+                .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 12 : 16)
+                .background(HermesPalette.control(colorScheme), in: RoundedRectangle(cornerRadius: 38))
             }
         }
         .frame(maxWidth: 760)
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
         .fileImporter(
             isPresented: $isImporterPresented,
@@ -108,8 +111,19 @@ struct ComposerView: View {
             }
         }
         .quickLookPreview($previewURL)
+        .task(id: model.composerFocusRequest) {
+            await focusForNewChatRequest()
+        }
         .onChange(of: focused) { _, value in model.isComposerFocused = value }
-        .onDisappear { model.isComposerFocused = false }
+        .onDisappear {
+            focused = false
+            model.isComposerFocused = false
+        }
+        .onChange(of: model.selectedChatID) { _, _ in
+            focused = false
+            isImporterPresented = false
+            previewURL = nil
+        }
         .onChange(of: model.recorder.isRecording) { _, isRecording in
             if isRecording {
                 focused = false
@@ -123,6 +137,30 @@ struct ComposerView: View {
         .onChange(of: model.isSettingsPresented) { _, isPresented in
             if isPresented { focused = false }
         }
+        .onChange(of: isModelPickerPresented) { _, isPresented in
+            if isPresented { focused = false }
+        }
+    }
+
+    @MainActor
+    private func focusForNewChatRequest() async {
+        let request = model.composerFocusRequest
+        guard handledFocusRequest != request else { return }
+        // The first task invocation also covers an initially displayed empty chat.
+        // Consume even blocked requests so dismissing a sheet never reopens the keyboard.
+        handledFocusRequest = request
+        guard model.canFocusComposer, model.selectedChat?.messages.isEmpty != false else { return }
+        await Task.yield()
+        guard !Task.isCancelled,
+              model.composerFocusRequest == request,
+              model.selectedChat?.messages.isEmpty != false,
+              model.canFocusComposer,
+              !isModelPickerPresented,
+              !isImporterPresented,
+              !model.isImportingAttachments,
+              previewURL == nil,
+              !model.recorder.isRecording else { return }
+        focused = true
     }
 
     private var messageField: some View {
@@ -154,10 +192,12 @@ struct ComposerView: View {
             focused = false
             Task { await model.startRecording() }
         } label: {
-            Image(systemName: "mic")
-                .font(.title3)
+            Image(systemName: "waveform")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+                .background(HermesPalette.actionAccent(colorScheme), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(model.isBusy || model.isImportingAttachments)
@@ -173,9 +213,9 @@ struct ComposerView: View {
         } label: {
             Image(systemName: "arrow.up")
                 .font(.headline.weight(.semibold))
-                .foregroundStyle(model.canSend ? HermesPalette.background(colorScheme) : Color.secondary)
+                .foregroundStyle(model.canSend ? Color.white : Color.secondary)
                 .frame(width: 44, height: 44)
-                .background(model.canSend ? Color.primary : Color(uiColor: .tertiarySystemFill), in: Circle())
+                .background(model.canSend ? HermesPalette.actionAccent(colorScheme) : Color(uiColor: .tertiarySystemFill), in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(!model.canSend)

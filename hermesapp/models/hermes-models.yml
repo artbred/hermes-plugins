@@ -1,0 +1,15 @@
+http:
+  routers:
+    hermes-model-options:
+      rule: Host(`hermes.sashakuzina.com`) && Method(`GET`) && Path(`/api/model/options`)
+      priority: 320
+      entryPoints:
+        - websecure
+      service: hermes-model-options
+      tls:
+        certResolver: letsencrypt
+  services:
+    hermes-model-options:
+      loadBalancer:
+        servers:
+          - url: http://172.23.0.1:8642

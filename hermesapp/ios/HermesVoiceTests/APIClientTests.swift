@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import HermesVoice
 
 @Suite("Native Hermes API boundaries")
@@ -11,6 +12,161 @@ struct APIClientTests {
           "runs_idempotency":{"supported":true,"durable":true}
         }}
         """
+
+    @Test("Native inventory ranks featured eligible models without conflating provider names")
+    func concreteModelInventory() async throws {
+        let server = StubServer { _ in .json(200, """
+            {"model":"server-only-default","provider":"unconfigured","providers":[
+              {"slug":"first","name":"Same name","authenticated":true,"source":"built-in",
+               "models":["alpha-base","alpha-feature","shared-model","alpha-feature","paid-model","hermes-agent","default",""," padded ","bad\\nmodel"],
+               "featured_models":["not-in-inventory","paid-model","alpha-feature","alpha-feature"],
+               "unavailable_models":["paid-model"]},
+              {"slug":"second","name":"Same name","authenticated":true,"source":"user-config",
+               "aliases":["custom:second","legacy-second"],"models":["shared-model","second-base"],
+               "featured_models":["shared-model"]},
+              {"slug":"first","authenticated":true,"models":["shared-model","third-feature"],"featured_models":["third-feature"]},
+              {"slug":"missing-auth","models":["not-authenticated"]},
+              {"slug":"unconfigured","authenticated":false,"source":"configured-current","models":["server-only-default"],"featured_models":["server-only-default"]},
+              {"slug":"moa","authenticated":true,"source":"virtual","auth_type":"virtual","models":["preset"]},
+              {"slug":"unreachable","authenticated":true,"native_catalog_empty":true,"models":["stale-model"]},
+              {"slug":"pending","authenticated":true,"free_tier_pending":true,"models":["locked-model"]},
+              {"slug":" bad-provider ","authenticated":true,"models":["otherwise-valid"]},
+              {"slug":"custom:local","authenticated":true,"models":["My Custom Model","MiniMax-M3:cloud"]},
+              {"slug":"empty","authenticated":true,"models":[]}
+            ]}
+            """) }
+        let choices = try await server.client(path: "/p/work").modelChoices()
+        #expect(choices.map(\.provider) == ["first", "second", "first", "first", "first", "second", "custom:local", "custom:local"])
+        #expect(choices.map(\.modelID) == [
+            "alpha-feature", "shared-model", "third-feature", "alpha-base", "shared-model",
+            "second-base", "My Custom Model", "MiniMax-M3:cloud"
+        ])
+        #expect(Set(choices.map(\.id)).count == choices.count)
+        #expect(choices[1].id != choices[4].id)
+    }
+
+    @Test("Empty and ineligible inventories never synthesize the top-level default", arguments: [
+        #"{"model":"global-default","provider":"global-provider","providers":[]}"#,
+        #"{"model":"global-default","provider":"global-provider","providers":[{"slug":"global-provider","authenticated":false,"models":["global-default"]}]}"#,
+        #"{"model":"global-default","provider":"global-provider","providers":[{"slug":"global-provider","authenticated":true,"models":["global-default"],"unavailable_models":["global-default"]}]}"#,
+        #"{"model":"global-default","provider":"global-provider","providers":[{"slug":"global-provider","authenticated":true,"models":["hermes-agent","hermes","default","auto","openrouter/auto"]}]}"#
+    ])
+    func noInventoryDefaultFallback(payload: String) async throws {
+        let server = StubServer { _ in .json(200, payload) }
+        #expect(try await server.client().modelChoices().isEmpty)
+        #expect(server.requests.map(\.path) == ["/api/model/options"])
+    }
+
+    @Test("Malformed native inventory fails rather than consulting virtual model aliases", arguments: [
+        "{}", "[]", "<html>Sign in</html>", #"{"providers":{}}"#,
+        #"{"providers":[{"slug":"valid","authenticated":true,"models":12}]}"#,
+        #"{"providers":[{"slug":"valid","authenticated":true,"models":[null]}]}"#,
+        #"{"providers":[{"slug":"valid","authenticated":"yes","models":["model"]}]}"#
+    ])
+    func malformedModelInventory(payload: String) async {
+        let server = StubServer { _ in .json(200, payload) }
+        let error = await #expect(throws: APIError.self) { try await server.client().modelChoices() }
+        guard case .invalidResponse? = error else { Issue.record("Expected invalidResponse"); return }
+        #expect(server.requests.map(\.path) == ["/api/model/options"])
+    }
+
+    @Test("Inventory authentication and missing routes do not fall back to /v1/models", arguments: [
+        (401, APIError.unauthorized),
+        (404, APIError.rejected(status: 404, message: "Inventory unavailable")),
+        (503, APIError.server(status: 503, message: "Inventory unavailable"))
+    ])
+    func unavailableModelInventory(status: Int, expected: APIError) async {
+        let server = StubServer { _ in .json(status, #"{"detail":"Inventory unavailable"}"#) }
+        let error = await #expect(throws: APIError.self) { try await server.client().modelChoices() }
+        #expect(error == expected)
+        #expect(server.requests.map(\.path) == ["/api/model/options"])
+    }
+
+    @Test("Run admission rejects non-concrete model identities before transport", arguments: [
+        ("", "model"), ("provider ", "model"), ("provider\nother", "model"),
+        ("auto", "model"), ("provider", ""), ("provider", " model"),
+        ("provider", "model\u{0}"), ("provider", "hermes-agent"), ("provider", "default"),
+        ("provider", "openrouter/auto")
+    ])
+    func invalidRunModelChoice(provider: String, model: String) async {
+        let server = StubServer { _ in .json(202, #"{"run_id":"unexpected","status":"started"}"#) }
+        let error = await #expect(throws: APIError.self) {
+            try await server.client().startRun(
+                text: "Hello", sessionKey: "ios-chat:test", sessionID: nil, idempotencyKey: "attempt",
+                modelChoice: HermesModelChoice(provider: provider, modelID: model, displayName: "Display"))
+        }
+        guard case .cannotPrepare? = error else { Issue.record("Expected cannotPrepare"); return }
+        #expect(server.requests.isEmpty)
+    }
+
+    @Test("Frozen concrete admission replays its original model identity after preference changes")
+    func frozenModelAdmission() async throws {
+        let admitted = Mutex<[String: Data]>([:])
+        let server = StubServer { request in
+            let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: String] ?? [:]
+            guard let key = request.request.value(forHTTPHeaderField: "Idempotency-Key"),
+                  let fingerprint = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else {
+                return .json(400, #"{"detail":"Missing admission identity"}"#)
+            }
+            let outcome = admitted.withLock { rows -> Int in
+                if let previous = rows[key] { return previous == fingerprint ? 202 : 409 }
+                rows[key] = fingerprint
+                return 0
+            }
+            if outcome == 409 { return .json(409, #"{"error":{"message":"Admission fingerprint changed"}}"#) }
+            if outcome == 0, key == "original" { return .failure(.networkConnectionLost) }
+            guard let provider = body["provider"], ["first", "second"].contains(provider),
+                  body["model"] == "Exact-MixedCase:model" else {
+                return .json(400, #"{"detail":"Wrong concrete provider/model"}"#)
+            }
+            return .json(202, "{\"run_id\":\"\(provider)-run\",\"status\":\"started\"}")
+        }
+        let first = HermesModelChoice(provider: "first", modelID: "Exact-MixedCase:model", displayName: "Same display")
+        let second = HermesModelChoice(provider: "second", modelID: first.modelID, displayName: first.displayName)
+        let frozen = RunSubmission(input: "Hello", sessionID: "session", instructions: "Policy",
+                                   sessionKey: "ios-chat:test", modelChoice: first)
+        let persisted = try JSONEncoder().encode(frozen)
+        _ = await #expect(throws: APIError.self) {
+            try await server.client().startRun(
+                text: frozen.input, sessionKey: frozen.sessionKey!, sessionID: frozen.sessionID,
+                idempotencyKey: "original", instructions: frozen.instructions, modelChoice: frozen.modelChoice)
+        }
+        let restored = try JSONDecoder().decode(RunSubmission.self, from: persisted)
+        let replay = try await server.client().startRun(
+            text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
+            idempotencyKey: "original", instructions: restored.instructions, modelChoice: restored.modelChoice)
+        #expect(replay.runID == "first-run")
+        let conflict = await #expect(throws: APIError.self) {
+            try await server.client().startRun(
+                text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
+                idempotencyKey: "original", instructions: restored.instructions, modelChoice: second)
+        }
+        #expect(conflict == .rejected(status: 409, message: "Admission fingerprint changed"))
+        let next = try await server.client().startRun(
+            text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
+            idempotencyKey: "next", instructions: restored.instructions, modelChoice: second)
+        #expect(next.runID == "second-run")
+    }
+
+    @Test("Legacy frozen admission omits new model fields and preserves its logical fingerprint")
+    func legacyFrozenAdmission() async throws {
+        let legacy = Data(#"{"input":"Original","sessionID":"old-session","sessionKey":"ios-chat:old"}"#.utf8)
+        let frozen = try JSONDecoder().decode(RunSubmission.self, from: legacy)
+        #expect(frozen.modelChoice == nil)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(frozen)) as? [String: String])
+        #expect(encoded == ["input": "Original", "sessionID": "old-session", "sessionKey": "ios-chat:old"])
+        let server = StubServer { request in
+            let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: String]
+            guard body == ["input": "Original", "session_id": "old-session"] else {
+                return .json(409, #"{"detail":"Legacy admission fingerprint changed"}"#)
+            }
+            return .json(202, #"{"run_id":"original-run","status":"started"}"#)
+        }
+        let receipt = try await server.client().startRun(
+            text: frozen.input, sessionKey: frozen.sessionKey!, sessionID: frozen.sessionID,
+            idempotencyKey: "legacy-attempt", instructions: frozen.instructions, modelChoice: frozen.modelChoice)
+        #expect(receipt.runID == "original-run")
+    }
 
     @Test("Readiness rejects non-native and wrong-field speech validation failures", arguments: [
         ("transcribe", #"{"detail":"Unprocessable entity"}"#),

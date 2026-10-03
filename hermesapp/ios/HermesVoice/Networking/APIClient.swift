@@ -298,8 +298,64 @@ struct APIClient: Sendable {
         return "Connected to Hermes\(capabilities.model.map { " · \($0)" } ?? ""). Chat, speech, files, classification, titles and memory reachable."
     }
 
-    func startRun(text: String, sessionKey: String, sessionID: String?, idempotencyKey: String, push: PushDestination? = nil, instructions: String? = nil) async throws -> RunReceipt {
-        struct Body: Encodable { var input: String; var session_id: String?; var instructions: String? }
+    func modelChoices() async throws -> [HermesModelChoice] {
+        struct Inventory: Decodable {
+            struct Provider: Decodable {
+                var slug: String
+                var models: [String]
+                var authenticated: Bool?
+                var source: String?
+                var auth_type: String?
+                var featured_models: [String]?
+                var unavailable_models: [String]?
+                var native_catalog_empty: Bool?
+                var free_tier_pending: Bool?
+            }
+            var providers: [Provider]
+        }
+        // The top-level model/provider describe server-global configuration, not a client choice.
+        let inventory: Inventory = try await get(["api", "model", "options"])
+        let providers = inventory.providers.compactMap { row -> (Inventory.Provider, Set<String>)? in
+            guard row.authenticated == true, row.source != "virtual", row.auth_type != "virtual",
+                  row.native_catalog_empty != true, row.free_tier_pending != true else { return nil }
+            let unavailable = Set(row.unavailable_models ?? [])
+            let available = Set(row.models.filter {
+                !unavailable.contains($0) &&
+                HermesModelChoice(provider: row.slug, modelID: $0, displayName: $0).isValid
+            })
+            return (row, available)
+        }
+        var choices: [HermesModelChoice] = []
+        var seen = Set<String>()
+        // Featured entries retain server ranking, then the remaining provider inventories retain order.
+        for featuredOnly in [true, false] {
+            for (row, available) in providers {
+                for modelID in featuredOnly ? row.featured_models ?? [] : row.models {
+                    guard available.contains(modelID) else { continue }
+                    var choice = HermesModelChoice(provider: row.slug, modelID: modelID, displayName: "")
+                    guard seen.insert(choice.id).inserted else { continue }
+                    let name = modelID.split(separator: "/").last.map(String.init) ?? modelID
+                    choice.displayName = name.replacingOccurrences(of: "-", with: " ")
+                        .replacingOccurrences(of: "_", with: " ").capitalized
+                        .replacingOccurrences(of: "Gpt", with: "GPT")
+                    choices.append(choice)
+                }
+            }
+        }
+        return choices
+    }
+
+    func startRun(text: String, sessionKey: String, sessionID: String?, idempotencyKey: String, push: PushDestination? = nil, instructions: String? = nil, modelChoice: HermesModelChoice?) async throws -> RunReceipt {
+        struct Body: Encodable {
+            var input: String
+            var session_id: String?
+            var instructions: String?
+            var provider: String?
+            var model: String?
+        }
+        guard modelChoice?.isValid != false else {
+            throw APIError.cannotPrepare("Choose a concrete provider and model from the available inventory.")
+        }
         var request = try request(["v1", "runs"], method: "POST")
         guard Self.safeHeader(sessionKey), Self.safeHeader(idempotencyKey) else {
             throw APIError.cannotPrepare("Invalid conversation or idempotency key.")
@@ -313,7 +369,9 @@ struct APIClient: Sendable {
             request.setValue(push.deviceID, forHTTPHeaderField: "X-Hermes-Push-Device")
             request.setValue(push.chatID, forHTTPHeaderField: "X-Hermes-Push-Chat")
         }
-        request.httpBody = try JSONEncoder().encode(Body(input: text, session_id: sessionID, instructions: instructions))
+        request.httpBody = try JSONEncoder().encode(Body(
+            input: text, session_id: sessionID, instructions: instructions,
+            provider: modelChoice?.provider, model: modelChoice?.modelID))
         return try Self.decode(RunReceipt.self, from: await send(request, accepted: [202]))
     }
 
