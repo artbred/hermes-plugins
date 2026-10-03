@@ -210,6 +210,20 @@ private struct ChatModelPicker: View {
     var body: some View {
         NavigationStack {
             List {
+                Picker("Thinking", selection: Binding(
+                    get: { model.selectedThinkingLevel },
+                    set: { model.selectThinkingLevel($0) }
+                )) {
+                    ForEach(ThinkingLevel.allCases) { level in
+                        Text(level.displayName)
+                            .tag(level)
+                            .accessibilityIdentifier("chatThinking-\(level.rawValue)")
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(!model.canChangeModel)
+                .accessibilityIdentifier("chatThinkingPicker")
+                .accessibilityValue(model.selectedThinkingLevel.displayName)
                 if model.isLoadingModels {
                     ProgressView("Loading models…")
                         .accessibilityIdentifier("chatModelsLoading")
@@ -242,11 +256,6 @@ private struct ChatModelPicker: View {
                                         Text("\(choice.provider) · \(choice.modelID)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                        if model.configuredDefaultModel?.id == choice.id {
-                                            Text("Hermes default")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
                                     }
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -264,8 +273,6 @@ private struct ChatModelPicker: View {
                             .accessibilityValue(model.selectedChatModel?.id == choice.id ? "Selected" : "")
                             .accessibilityIdentifier("chatModel-\(choice.id)")
                         }
-                    } footer: {
-                        Text("The selected model is used for new messages in this chat.")
                     }
                 } else if !model.isLoadingModels && model.modelSelectionError == nil {
                     Text("No selectable models are available from this server.")
@@ -277,11 +284,6 @@ private struct ChatModelPicker: View {
             .contentMargins(.top, 0, for: .scrollContent)
             .navigationTitle("Choose model")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
         .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
         .presentationDragIndicator(.visible)

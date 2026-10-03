@@ -134,6 +134,7 @@ final class AppModel {
         guard let selected = selectedChat?.modelChoice ?? configuredDefaultModel else { return nil }
         return availableModelsByID[selected.id] ?? selected
     }
+    var selectedThinkingLevel: ThinkingLevel { selectedChat?.thinkingLevel ?? .automatic }
     var modelChoices: [HermesModelChoice] {
         guard !availableModels.isEmpty else { return [] }
         var choices: [HermesModelChoice] = []
@@ -200,6 +201,15 @@ final class AppModel {
             manuallySelectedChatIDs.insert(chat.id)
             modelSelectionError = nil
         } catch { show(error, title: "Could not save model selection") }
+    }
+
+    func selectThinkingLevel(_ level: ThinkingLevel) {
+        guard canChangeModel else { return }
+        if selectedChat == nil { newChat(focusComposer: false) }
+        guard var chat = selectedChat else { return }
+        chat.thinkingLevel = level
+        do { try store.save(chat) }
+        catch { show(error, title: "Could not save thinking level") }
     }
     var isBusy: Bool { selectedChat?.hasPendingMessages == true }
     /// A take is recording, or its microphone session is still activating.
@@ -327,6 +337,7 @@ final class AppModel {
         guard var chat = selectedChat, !chat.hasPendingMessages else { return }
         var message = ChatMessage(role: .user, text: text, attachments: chat.draftAttachments)
         message.modelChoice = choice
+        message.thinkingLevel = chat.thinkingLevel ?? .automatic
         chat.messages.append(message)
         chat.draftAttachments = nil
         chat.updatedAt = .now
@@ -402,6 +413,7 @@ final class AppModel {
         guard let chatID = recordingChatID, var chat = store.chat(id: chatID) else { return }
         var message = ChatMessage(id: recording.id, role: .user, input: .voice, text: "", createdAt: recording.startedAt, audioFileName: recording.url.lastPathComponent, attachments: chat.draftAttachments, recordingDuration: recording.duration)
         message.modelChoice = chat.modelChoice ?? configuredDefaultModel
+        message.thinkingLevel = chat.thinkingLevel ?? .automatic
         chat.messages.append(message)
         chat.draftAttachments = nil
         chat.updatedAt = .now
@@ -426,9 +438,13 @@ final class AppModel {
                     $0.runWasTerminal = false
                     $0.submission = nil
                     $0.modelChoice = chat.modelChoice ?? configuredDefaultModel
+                    $0.thinkingLevel = chat.thinkingLevel ?? .automatic
                 }
                 if $0.submission == nil, $0.runID == nil, $0.modelChoice == nil {
                     $0.modelChoice = chat.modelChoice ?? configuredDefaultModel
+                }
+                if $0.submission == nil, $0.runID == nil, $0.thinkingLevel == nil {
+                    $0.thinkingLevel = chat.thinkingLevel ?? .automatic
                 }
                 $0.error = nil
                 $0.stopRequested = nil
@@ -695,6 +711,7 @@ final class AppModel {
                 var submission = RunSubmission(input: try message.agentInput(), sessionID: chat.sessionID,
                                                instructions: MobileResponseFormat.instructions, sessionKey: chat.sessionKey)
                 submission.modelChoice = message.modelChoice
+                submission.thinkingLevel = message.thinkingLevel
                 message.submission = submission
                 try updateMessage(chatID, message.id) {
                     $0.modelChoice = message.modelChoice
@@ -714,7 +731,7 @@ final class AppModel {
                 message.replyNotificationRequested = true
                 try updateMessage(chatID, message.id) { $0.replyNotificationRequested = true }
             }
-            let receipt = try await client.startRun(text: submission.input, sessionKey: sessionKey, sessionID: submission.sessionID, idempotencyKey: message.requestKey, push: push, instructions: submission.instructions, modelChoice: submission.modelChoice)
+            let receipt = try await client.startRun(text: submission.input, sessionKey: sessionKey, sessionID: submission.sessionID, idempotencyKey: message.requestKey, push: push, instructions: submission.instructions, modelChoice: submission.modelChoice, thinkingLevel: submission.thinkingLevel)
             // Never let an old cancelled callback overwrite a replacement worker. The
             // persisted submission lets that worker recover this same run idempotently.
             guard workerIDs[chatID] == workerID else { throw CancellationError() }

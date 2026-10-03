@@ -45,6 +45,7 @@
 		B9ED4E6547D4593931103DE7 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 45141B01DA344A6DE15B5884 /* SwiftSoup */; };
 		C141990F0EE5F6B2CDBE44CD /* ResponseContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC4D8BDFF6889F989DDEBFDE /* ResponseContent.swift */; };
 		C26B3253A7147C33661F6FDF /* SendMessageIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C2655BFFEF26606401FD4AC /* SendMessageIntent.swift */; };
+		C35127E54F7DDF8A5F587CB5 /* ThinkingLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C940DA8B8172CF1D088B3E04 /* ThinkingLevel.swift */; };
 		C35EF3DB60590023EDE654C7 /* ReplyNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF2323B61CEF76D458F6E35 /* ReplyNotifications.swift */; };
 		C48D8BB034FEF82B5CC96BD5 /* Recorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F28EC8D027E67DA45B437DA /* Recorder.swift */; };
 		C8D434563EBFF9D4E4A02284 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E65E1DD157D2AF19B1D3BB /* APIClient.swift */; };
@@ -111,6 +112,7 @@
 		C1044E809AF8960C0C6193E8 /* ReplyNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyNotificationTests.swift; sourceTree = "<group>"; };
 		C130262EF52B4FEB052432F2 /* ResponseWebScripts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseWebScripts.swift; sourceTree = "<group>"; };
 		C4E65E1DD157D2AF19B1D3BB /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		C940DA8B8172CF1D088B3E04 /* ThinkingLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingLevel.swift; sourceTree = "<group>"; };
 		CB34F2AE4F9BAAC91EAA5950 /* MobileResponseFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileResponseFormat.swift; sourceTree = "<group>"; };
 		CC8043294CA3F882A41D6BE2 /* ResponseWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseWebView.swift; sourceTree = "<group>"; };
 		CDAD9A231B3E56C8EA97087D /* ResponseWebStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseWebStyles.swift; sourceTree = "<group>"; };
@@ -271,6 +273,7 @@
 				85FAEEBEFC3989F35B3EE463 /* HermesModelChoice.swift */,
 				123750B6008545EFE7B9101E /* HermesModelInventory.swift */,
 				809B89F99662C3629871B464 /* SpeechVoice.swift */,
+				C940DA8B8172CF1D088B3E04 /* ThinkingLevel.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -419,6 +422,7 @@
 				C98B8C1A809EFE9B7FE1B52D /* SettingsView.swift in Sources */,
 				1B986C97399BEADD36F02632 /* SpeechVoice.swift in Sources */,
 				15EE490399EE18B792F7B7D5 /* StartVoiceChatIntent.swift in Sources */,
+				C35127E54F7DDF8A5F587CB5 /* ThinkingLevel.swift in Sources */,
 				DB0FF4727FF08ED21DD18B7D /* VoiceMessageView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -548,7 +552,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -621,7 +625,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_NS_ASSERTIONS = NO;

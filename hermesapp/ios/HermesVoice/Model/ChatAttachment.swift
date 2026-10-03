@@ -16,6 +16,7 @@ struct RunSubmission: Codable, Equatable, Sendable {
     var instructions: String?
     var sessionKey: String?
     var modelChoice: HermesModelChoice?
+    var thinkingLevel: ThinkingLevel?
 }
 
 /// Copies a Files-provider item into app-owned storage while its security scope is held.

@@ -43,6 +43,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var attachments: [ChatAttachment]?
     var submission: RunSubmission?
     var modelChoice: HermesModelChoice?
+    var thinkingLevel: ThinkingLevel?
     // Stop intent survives uncertain admission and relaunch; an acknowledgement is not terminal.
     var stopRequested: Bool?
     var stopAcknowledged: Bool?
@@ -75,6 +76,7 @@ struct Chat: Identifiable, Codable, Equatable, Sendable {
     var titleNeedsPublishing: Bool?
     var draftAttachments: [ChatAttachment]?
     var modelChoice: HermesModelChoice?
+    var thinkingLevel: ThinkingLevel?
 
     var sessionKey: String { "ios-chat:\(id)" }
     var hasPendingMessages: Bool { messages.contains { $0.role == .user && $0.stage.isPending } }

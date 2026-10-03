@@ -235,7 +235,7 @@ struct APIClientTests {
         let error = await #expect(throws: APIError.self) {
             try await server.client().startRun(
                 text: "Hello", sessionKey: "ios-chat:test", sessionID: nil, idempotencyKey: "attempt",
-                modelChoice: HermesModelChoice(provider: provider, modelID: model, displayName: "Display"))
+                modelChoice: HermesModelChoice(provider: provider, modelID: model, displayName: "Display"), thinkingLevel: nil)
         }
         guard case .cannotPrepare? = error else { Issue.record("Expected cannotPrepare"); return }
         #expect(server.requests.isEmpty)
@@ -271,22 +271,22 @@ struct APIClientTests {
         _ = await #expect(throws: APIError.self) {
             try await server.client().startRun(
                 text: frozen.input, sessionKey: frozen.sessionKey!, sessionID: frozen.sessionID,
-                idempotencyKey: "original", instructions: frozen.instructions, modelChoice: frozen.modelChoice)
+                idempotencyKey: "original", instructions: frozen.instructions, modelChoice: frozen.modelChoice, thinkingLevel: nil)
         }
         let restored = try JSONDecoder().decode(RunSubmission.self, from: persisted)
         let replay = try await server.client().startRun(
             text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
-            idempotencyKey: "original", instructions: restored.instructions, modelChoice: restored.modelChoice)
+            idempotencyKey: "original", instructions: restored.instructions, modelChoice: restored.modelChoice, thinkingLevel: nil)
         #expect(replay.runID == "first-run")
         let conflict = await #expect(throws: APIError.self) {
             try await server.client().startRun(
                 text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
-                idempotencyKey: "original", instructions: restored.instructions, modelChoice: second)
+                idempotencyKey: "original", instructions: restored.instructions, modelChoice: second, thinkingLevel: nil)
         }
         #expect(conflict == .rejected(status: 409, message: "Admission fingerprint changed"))
         let next = try await server.client().startRun(
             text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
-            idempotencyKey: "next", instructions: restored.instructions, modelChoice: second)
+            idempotencyKey: "next", instructions: restored.instructions, modelChoice: second, thinkingLevel: nil)
         #expect(next.runID == "second-run")
     }
 
@@ -295,6 +295,7 @@ struct APIClientTests {
         let legacy = Data(#"{"input":"Original","sessionID":"old-session","sessionKey":"ios-chat:old"}"#.utf8)
         let frozen = try JSONDecoder().decode(RunSubmission.self, from: legacy)
         #expect(frozen.modelChoice == nil)
+        #expect(frozen.thinkingLevel == nil)
         let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(frozen)) as? [String: String])
         #expect(encoded == ["input": "Original", "sessionID": "old-session", "sessionKey": "ios-chat:old"])
         let server = StubServer { request in
@@ -306,8 +307,121 @@ struct APIClientTests {
         }
         let receipt = try await server.client().startRun(
             text: frozen.input, sessionKey: frozen.sessionKey!, sessionID: frozen.sessionID,
-            idempotencyKey: "legacy-attempt", instructions: frozen.instructions, modelChoice: frozen.modelChoice)
+            idempotencyKey: "legacy-attempt", instructions: frozen.instructions, modelChoice: frozen.modelChoice, thinkingLevel: frozen.thinkingLevel)
         #expect(receipt.runID == "original-run")
+    }
+
+    @Test("Frozen thinking admission survives persistence and rejects changed effort on the same key")
+    func frozenThinkingAdmission() async throws {
+        let admitted = Mutex<[String: Data]>([:])
+        let server = StubServer { request in
+            guard let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let key = request.request.value(forHTTPHeaderField: "Idempotency-Key"),
+                  let fingerprint = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else {
+                return .json(400, #"{"detail":"Missing admission identity"}"#)
+            }
+            let outcome = admitted.withLock { rows -> Int in
+                if let previous = rows[key] { return previous == fingerprint ? 202 : 409 }
+                rows[key] = fingerprint
+                return 0
+            }
+            if outcome == 409 { return .json(409, #"{"error":{"message":"Admission fingerprint changed"}}"#) }
+            if outcome == 0, key == "original" { return .failure(.networkConnectionLost) }
+            guard let options = body["model_options"] as? [String: Any],
+                  let reasoning = options["reasoning"] as? [String: Any],
+                  reasoning["enabled"] as? Bool == true,
+                  let effort = reasoning["effort"] as? String, ["high", "low"].contains(effort),
+                  body["provider"] as? String == "provider",
+                  body["model"] as? String == "Exact-MixedCase:model" else {
+                return .json(400, #"{"detail":"Wrong reasoning or model override"}"#)
+            }
+            return .json(202, "{\"run_id\":\"\(effort)-run\",\"status\":\"started\"}")
+        }
+        let choice = HermesModelChoice(provider: "provider", modelID: "Exact-MixedCase:model", displayName: "Display")
+        let frozen = RunSubmission(input: "Hello", sessionID: "session", instructions: "Policy",
+                                   sessionKey: "ios-chat:test", modelChoice: choice, thinkingLevel: .high)
+        let persisted = try JSONEncoder().encode(frozen)
+        _ = await #expect(throws: APIError.self) {
+            try await server.client().startRun(
+                text: frozen.input, sessionKey: frozen.sessionKey!, sessionID: frozen.sessionID,
+                idempotencyKey: "original", instructions: frozen.instructions,
+                modelChoice: frozen.modelChoice, thinkingLevel: frozen.thinkingLevel)
+        }
+        let restored = try JSONDecoder().decode(RunSubmission.self, from: persisted)
+        #expect(restored.thinkingLevel == .high)
+        let replay = try await server.client().startRun(
+            text: restored.input, sessionKey: restored.sessionKey!, sessionID: restored.sessionID,
+            idempotencyKey: "original", instructions: restored.instructions,
+            modelChoice: restored.modelChoice, thinkingLevel: restored.thinkingLevel)
+        #expect(replay.runID == "high-run")
+        var nextAttempt = restored
+        nextAttempt.thinkingLevel = .low
+        let restoredNext = try JSONDecoder().decode(RunSubmission.self, from: JSONEncoder().encode(nextAttempt))
+        #expect(restoredNext.thinkingLevel == .low)
+        let conflict = await #expect(throws: APIError.self) {
+            try await server.client().startRun(
+                text: restoredNext.input, sessionKey: restoredNext.sessionKey!, sessionID: restoredNext.sessionID,
+                idempotencyKey: "original", instructions: restoredNext.instructions,
+                modelChoice: restoredNext.modelChoice, thinkingLevel: restoredNext.thinkingLevel)
+        }
+        #expect(conflict == .rejected(status: 409, message: "Admission fingerprint changed"))
+        let next = try await server.client().startRun(
+            text: restoredNext.input, sessionKey: restoredNext.sessionKey!, sessionID: restoredNext.sessionID,
+            idempotencyKey: "next", instructions: restoredNext.instructions,
+            modelChoice: restoredNext.modelChoice, thinkingLevel: restoredNext.thinkingLevel)
+        #expect(next.runID == "low-run")
+    }
+
+    @Test("Automatic reasoning preserves the legacy admission fingerprint; disabling changes it without effort")
+    func automaticAndDisabledThinkingAdmission() async throws {
+        let admitted = Mutex<[String: Data]>([:])
+        let server = StubServer { request in
+            guard let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let key = request.request.value(forHTTPHeaderField: "Idempotency-Key"),
+                  let fingerprint = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else {
+                return .json(400, #"{"detail":"Missing admission identity"}"#)
+            }
+            let outcome = admitted.withLock { rows -> Int in
+                if let previous = rows[key] { return previous == fingerprint ? 202 : 409 }
+                rows[key] = fingerprint
+                return 202
+            }
+            if outcome == 409 { return .json(409, #"{"error":{"message":"Admission fingerprint changed"}}"#) }
+            return .json(202, #"{"run_id":"accepted","status":"started"}"#)
+        }
+        let choice = HermesModelChoice(provider: "provider", modelID: "Exact-MixedCase:model", displayName: "Display")
+        let inheritedLevels: [ThinkingLevel?] = [nil, .automatic]
+        for level in inheritedLevels {
+            let receipt = try await server.client().startRun(
+                text: "Hello", sessionKey: "ios-chat:test", sessionID: "session", idempotencyKey: "same",
+                instructions: "Policy", modelChoice: choice, thinkingLevel: level)
+            #expect(receipt.runID == "accepted")
+        }
+        let expected: [String: String] = [
+            "input": "Hello", "session_id": "session", "instructions": "Policy",
+            "provider": "provider", "model": "Exact-MixedCase:model"
+        ]
+        for request in server.requests {
+            #expect(try JSONSerialization.jsonObject(with: request.body) as? [String: String] == expected)
+            #expect(request.request.value(forHTTPHeaderField: "X-Hermes-Session-Key") == "ios-chat:test")
+            #expect(request.request.value(forHTTPHeaderField: "Idempotency-Key") == "same")
+        }
+        let conflict = await #expect(throws: APIError.self) {
+            try await server.client().startRun(
+                text: "Hello", sessionKey: "ios-chat:test", sessionID: "session", idempotencyKey: "same",
+                instructions: "Policy", modelChoice: choice, thinkingLevel: .off)
+        }
+        #expect(conflict == .rejected(status: 409, message: "Admission fingerprint changed"))
+        _ = try await server.client().startRun(
+            text: "Hello", sessionKey: "ios-chat:test", sessionID: "session", idempotencyKey: "disabled",
+            instructions: "Policy", modelChoice: choice, thinkingLevel: .off)
+        let disabledRequest = try #require(server.requests.last)
+        var disabledBody = try #require(JSONSerialization.jsonObject(with: disabledRequest.body) as? [String: Any])
+        let options = try #require(disabledBody.removeValue(forKey: "model_options") as? [String: Any])
+        #expect(Set(options.keys) == ["reasoning"])
+        let reasoning = try #require(options["reasoning"] as? [String: Bool])
+        #expect(reasoning == ["enabled": false])
+        #expect(disabledBody as? [String: String] == expected)
     }
 
     @Test("Readiness rejects non-native and wrong-field speech validation failures", arguments: [

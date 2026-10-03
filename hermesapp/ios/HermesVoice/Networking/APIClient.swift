@@ -438,16 +438,33 @@ struct APIClient: Sendable {
                                     suggestedModels: suggestedModels, availableModels: availableModels)
     }
 
-    func startRun(text: String, sessionKey: String, sessionID: String?, idempotencyKey: String, push: PushDestination? = nil, instructions: String? = nil, modelChoice: HermesModelChoice?) async throws -> RunReceipt {
+    func startRun(text: String, sessionKey: String, sessionID: String?, idempotencyKey: String, push: PushDestination? = nil, instructions: String? = nil, modelChoice: HermesModelChoice?, thinkingLevel: ThinkingLevel?) async throws -> RunReceipt {
         struct Body: Encodable {
+            struct ModelOptions: Encodable {
+                struct Reasoning: Encodable {
+                    var enabled: Bool
+                    var effort: String?
+                }
+                var reasoning: Reasoning
+            }
             var input: String
             var session_id: String?
             var instructions: String?
             var provider: String?
             var model: String?
+            var model_options: ModelOptions?
         }
         guard modelChoice?.isValid != false else {
             throw APIError.cannotPrepare("Choose a concrete provider and model from the available inventory.")
+        }
+        let modelOptions: Body.ModelOptions?
+        switch thinkingLevel {
+        case nil, .automatic:
+            modelOptions = nil
+        case .off:
+            modelOptions = .init(reasoning: .init(enabled: false, effort: nil))
+        case .some(let level):
+            modelOptions = .init(reasoning: .init(enabled: true, effort: level.rawValue))
         }
         var request = try request(["v1", "runs"], method: "POST")
         guard Self.safeHeader(sessionKey), Self.safeHeader(idempotencyKey) else {
@@ -464,7 +481,7 @@ struct APIClient: Sendable {
         }
         request.httpBody = try JSONEncoder().encode(Body(
             input: text, session_id: sessionID, instructions: instructions,
-            provider: modelChoice?.provider, model: modelChoice?.modelID))
+            provider: modelChoice?.provider, model: modelChoice?.modelID, model_options: modelOptions))
         return try Self.decode(RunReceipt.self, from: await send(request, accepted: [202]))
     }
 
