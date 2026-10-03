@@ -64,6 +64,7 @@ struct ComposerView: View {
                                 attachButton
                                 Spacer()
                                 if model.isBusy {
+                                    if model.isAudioPlaying { voiceButton }
                                     stopButton
                                 } else {
                                     voiceButton
@@ -77,6 +78,7 @@ struct ComposerView: View {
                             messageField
                                 .padding(.vertical, 11)
                             if model.isBusy {
+                                if model.isAudioPlaying { voiceButton }
                                 stopButton
                             } else {
                                 voiceButton
@@ -189,10 +191,14 @@ struct ComposerView: View {
 
     private var voiceButton: some View {
         Button {
-            focused = false
-            Task { await model.startRecording() }
+            if model.isAudioPlaying {
+                model.pausePlayback()
+            } else {
+                focused = false
+                Task { await model.startRecording() }
+            }
         } label: {
-            Image(systemName: "waveform")
+            Image(systemName: model.isAudioPlaying ? "stop.fill" : "waveform")
                 .font(.title3.weight(.medium))
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
@@ -200,10 +206,12 @@ struct ComposerView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(model.isBusy || model.isImportingAttachments)
-        .accessibilityLabel("Record voice message")
-        .accessibilityHint("Tap Send to submit your recording. Touch anywhere else in the app to discard it.")
-        .accessibilityIdentifier("recordButton")
+        .disabled(!model.isAudioPlaying && (model.isBusy || model.isImportingAttachments))
+        .accessibilityLabel(model.isAudioPlaying ? "Stop audio" : "Record voice message")
+        .accessibilityHint(model.isAudioPlaying
+            ? "Pauses the reply. Resume audio beneath the reply, or tap here again to record."
+            : "Tap Send to submit your recording. Touch anywhere else in the app to discard it.")
+        .accessibilityIdentifier(model.isAudioPlaying ? "pauseReplyAudioButton" : "recordButton")
     }
 
     private var sendButton: some View {

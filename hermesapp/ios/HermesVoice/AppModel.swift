@@ -852,6 +852,8 @@ final class AppModel {
         await synthesizeAndPlay(current, chatID: chat.id, automatic: false)
     }
 
+    func pausePlayback() { player.pause() }
+
     func stopPlayback() { player.stop() }
 
     private func scheduleSpeech(_ message: ChatMessage, chatID: String) {
