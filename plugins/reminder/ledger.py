@@ -1,59 +1,46 @@
-"""Reminder ledger: obligations, touches, and verb checklists.
+"""Reminder ledger: per-turn tasks, obligations and the tool-touch log.
 
-Pure storage + rules. No network, no Jev calls — fast enough to run inside
-middleware on every turn. Graphiti holds the long-lived system map; this
-SQLite ledger is the working set (open obligations, recent touches).
+Pure storage. No network. Keys are per turn (hash of the Hermes turn id), so
+the same request text in two turns or two sessions never shares state.
+Graphiti holds the long-lived system map; this SQLite file is the working set.
 """
 
 from __future__ import annotations
 
-import hashlib
-import re
+import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
 
+try:
+    from .rules import CHECKLISTS
+except ImportError:  # imported as a plain module (tests, flush.py)
+    from rules import CHECKLISTS
+
 _LOCK = threading.Lock()
+_MIGRATED: set = set()
+SCHEMA_VERSION = 1
+PRUNE_DAYS = 14
 
 
 def default_db() -> Path:
-    home = Path.home() / ".hermes" / "reminder"
-    home.mkdir(parents=True, exist_ok=True)
-    return home / "ledger.db"
+    override = os.environ.get("REMINDER_DB")
+    if override:
+        return Path(override)
+    try:
+        from hermes_constants import get_hermes_home
+        home = Path(get_hermes_home())
+    except Exception:
+        home = Path.home() / ".hermes"
+    directory = home / "reminder"
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    return directory / "ledger.db"
 
-
-VERBS = {
-    "remove": re.compile(
-        r"\b(remove|delete|uninstall|retire|drop|purge|wipe|clean ?up)\b",
-        re.IGNORECASE),
-    "install": re.compile(
-        r"\b(install|add|create|enable|set ?up|deploy|configure)\b",
-        re.IGNORECASE),
-    "secret": re.compile(
-        r"\b(credential|secret|api[-_ ]?key|token|password|auth)\b",
-        re.IGNORECASE),
-    "schedule": re.compile(
-        r"\b(cron|schedule|timer|heartbeat|monitor|watch)\b",
-        re.IGNORECASE),
-    "update": re.compile(
-        r"\b(update|upgrade|migrate|bump)\b",
-        re.IGNORECASE),
-}
-
-CHECKLISTS = {
-    "remove": ("Removal leftovers check: still registered (plugin list)? "
-               "still scheduled (cron)? files remain on disk? config "
-               "references left? Verify absence, do not just claim it."),
-    "install": ("Install wiring check: installed AND enabled AND configured "
-                "AND verified working (version/health command output shown)?"),
-    "secret": ("Secret hygiene: redacted in outputs? gitignored, never "
-               "committed? file permissions private? staged diffs scanned?"),
-    "schedule": ("Schedule check: installed in the right scheduler? logging "
-                "to a known file? first tick verified, not just assumed?"),
-    "update": ("Update check: version before/after shown? dependents still "
-              "healthy? rollback path known?"),
-}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -83,62 +70,114 @@ CREATE TABLE IF NOT EXISTS touches (
 );
 """
 
+_COLUMNS = {
+    "tasks": [("session_id", "TEXT DEFAULT ''")],
+    "touches": [("ran", "INTEGER NOT NULL DEFAULT 1"),
+                ("sig", "TEXT DEFAULT ''"),
+                ("result_hash", "TEXT DEFAULT ''")],
+}
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    version = con.execute("PRAGMA user_version").fetchone()[0]
+    if version >= SCHEMA_VERSION:
+        return
+    for table, columns in _COLUMNS.items():
+        present = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in present:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    # v0 keyed tasks by message text and never auto-closed; those checks can
+    # no longer be matched to a turn, so retire them honestly.
+    con.execute("UPDATE obligations SET status='expired' WHERE status='open'")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_touches_task ON touches(task_hash, id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_obl_task ON obligations(task_hash, status)")
+    con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    con.commit()
+
 
 def connect(path=None) -> sqlite3.Connection:
-    con = sqlite3.connect(str(path or default_db()))
-    con.executescript(SCHEMA)
+    target = Path(path) if path else default_db()
+    con = sqlite3.connect(str(target), timeout=2.0)
+    key = str(target)
+    if key not in _MIGRATED:
+        with _LOCK:
+            con.executescript(SCHEMA)
+            _migrate(con)
+            _MIGRATED.add(key)
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
     return con
 
 
-def task_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def detect_verbs(text: str):
-    return sorted(kind for kind, rx in VERBS.items() if rx.search(text))
-
-
-def ensure_task(con, text: str, summary: str = ""):
-    """Create the task + verb obligations once; return (hash, is_new)."""
-    verbs = detect_verbs(text)
-    if not verbs:
-        return None, False
-    thash = task_hash(text)
+def open_task(con, thash: str, session_id: str, summary: str, kinds) -> list:
+    """Create the task row if needed and add obligations for new kinds."""
+    now = time.time()
+    added = []
     with _LOCK:
-        row = con.execute("SELECT task_hash FROM tasks WHERE task_hash=?",
+        row = con.execute("SELECT verbs FROM tasks WHERE task_hash=?",
                           (thash,)).fetchone()
-        if row:
-            return thash, False
-        now = time.time()
-        con.execute(
-            "INSERT INTO tasks (task_hash, summary, verbs, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (thash, summary[:200] or text[:200], ",".join(verbs), now))
-        for verb in verbs:
+        have = set(row[0].split(",")) if row and row[0] else set()
+        new = [k for k in kinds if k not in have and k in CHECKLISTS]
+        if row is None:
+            con.execute(
+                "INSERT INTO tasks (task_hash, summary, verbs, created_at, session_id)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (thash, summary[:200], ",".join(sorted(kinds)), now, session_id[:80]))
+        elif new:
+            con.execute("UPDATE tasks SET verbs=? WHERE task_hash=?",
+                        (",".join(sorted(have | set(new))), thash))
+        for kind in new:
             con.execute(
                 "INSERT INTO obligations (task_hash, kind, detail, created_at)"
-                " VALUES (?, ?, ?, ?)",
-                (thash, verb, CHECKLISTS[verb], now))
+                " VALUES (?, ?, ?, ?)", (thash, kind, CHECKLISTS[kind], now))
+            added.append(kind)
         con.commit()
-    return thash, True
+    return added
 
 
-def record_touch(con, thash: str, tool: str, summary: str, ok: bool):
+def record_touch(con, thash: str, tool: str, summary: str, ok: bool,
+                 ran: bool = True, sig: str = "", result_hash: str = "") -> int:
     with _LOCK:
-        con.execute(
-            "INSERT INTO touches (task_hash, tool, summary, ok, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (thash, tool, summary[:300], 1 if ok else 0, time.time()))
+        cur = con.execute(
+            "INSERT INTO touches (task_hash, tool, summary, ok, created_at, ran, sig,"
+            " result_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (thash, tool[:60], summary[:600], 1 if ok else 0, time.time(),
+             1 if ran else 0, sig[:120], result_hash[:16]))
         con.commit()
+        return cur.lastrowid
+
+
+def touches(con, thash: str, limit: int = 400):
+    return con.execute(
+        "SELECT id, tool, summary, ran, ok FROM touches WHERE task_hash=?"
+        " ORDER BY id LIMIT ?", (thash, limit)).fetchall()
 
 
 def open_obligations(con, thash: str):
     return con.execute(
-        "SELECT kind, detail FROM obligations WHERE task_hash=? AND status='open'",
-        (thash,)).fetchall()
+        "SELECT kind, detail FROM obligations WHERE task_hash=? AND status='open'"
+        " ORDER BY id", (thash,)).fetchall()
 
 
-def resolve_obligation(con, thash: str, kind: str, evidence: str):
+def active_obligations(con, thash: str):
+    """Open and done checks of a turn (done can reopen after a later change)."""
+    return con.execute(
+        "SELECT kind, detail, status FROM obligations WHERE task_hash=? AND "
+        "status IN ('open', 'done') ORDER BY id", (thash,)).fetchall()
+
+
+def reopen_obligation(con, thash: str, kind: str) -> None:
+    with _LOCK:
+        con.execute(
+            "UPDATE obligations SET status='open', resolved_at=NULL "
+            "WHERE task_hash=? AND kind=? AND status='done'", (thash, kind))
+        con.commit()
+
+
+def resolve_obligation(con, thash: str, kind: str, evidence: str) -> None:
     with _LOCK:
         con.execute(
             "UPDATE obligations SET status='done', evidence=?, resolved_at=? "
@@ -147,19 +186,12 @@ def resolve_obligation(con, thash: str, kind: str, evidence: str):
         con.commit()
 
 
-def latest_open_task(con):
-    row = con.execute(
-        "SELECT task_hash FROM tasks WHERE status='open' "
-        "ORDER BY created_at DESC LIMIT 1").fetchone()
-    return row[0] if row else None
-
-
-def reminder_block(con, thash: str, max_lines: int = 8) -> str:
-    items = open_obligations(con, thash)
-    if not items:
-        return ""
-    lines = ["[reminder] Open checks for this task — verify with evidence, "
-             "do not just claim:"]
-    for kind, detail in items[:max_lines]:
-        lines.append(f"- ({kind}) {detail}")
-    return "\n".join(lines)
+def prune(con, days: int = PRUNE_DAYS) -> int:
+    """Drop old touches of turns that never opened a task."""
+    cutoff = time.time() - days * 86400
+    with _LOCK:
+        cur = con.execute(
+            "DELETE FROM touches WHERE created_at < ? AND task_hash NOT IN "
+            "(SELECT task_hash FROM tasks)", (cutoff,))
+        con.commit()
+        return cur.rowcount

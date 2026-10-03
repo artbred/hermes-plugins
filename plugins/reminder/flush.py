@@ -128,9 +128,12 @@ def collect(con, state):
                     (f"reminder task {thash[:8]}", "VERIFIED",
                      f"{kind} check resolved: {evidence[:280]}",
                      f"{kind} check")))
+    # Touches are logged for every turn since 0.3.0; only failures inside
+    # turns that opened a checklist are worth a triplet.
     for tid, thash, tool, summary, _ in con.execute(
             "SELECT id, task_hash, tool, summary, created_at FROM touches "
-            "WHERE ok=0 AND id > ? ORDER BY id", (state["touches"],)):
+            "WHERE ok=0 AND id > ? AND task_hash IN (SELECT task_hash FROM tasks) "
+            "ORDER BY id", (state["touches"],)):
         ops.append(("touches", tid,
                     (tool, "FAILED_WITH",
                      f"Tool failed during task: {summary[:280]}",

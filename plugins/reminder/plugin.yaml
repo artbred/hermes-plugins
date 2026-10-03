@@ -1,6 +1,6 @@
 name: reminder
-version: 0.2.0
-description: "Gatekeeper ledger: derives checklists from request verbs, records tool evidence, and injects open checks back into the run."
+version: 0.3.0
+description: "Per-turn proof-before-done checklists: opens checks for change requests, logs tool evidence, auto-closes on read-only verification, nudges until verified."
 author: Artem + Hermes
 license: MIT
 kind: standalone

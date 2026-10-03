@@ -13,7 +13,10 @@ from pathlib import Path
 
 import httpx
 
-from language_voice import LanguageVoice
+try:
+    from .language_voice import LanguageVoice
+except ImportError:  # run as a top-level module (speech_server.py, CLI)
+    from language_voice import LanguageVoice
 
 API = "https://api.fish.audio/v1/tts"
 MODEL = "s2.1-pro"

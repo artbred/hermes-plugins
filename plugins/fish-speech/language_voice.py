@@ -1,8 +1,10 @@
-"""One bounded, advisory Jev classification of a completed speech reply."""
+"""Speech-reply language routing: local Cyrillic check first, one bounded, advisory
+Jev classification as tiebreak for undecided text."""
 
 import asyncio
 import json
 import math
+import re
 
 import httpx
 
@@ -32,6 +34,36 @@ LANGUAGE_QUESTION = {
         "other": "Other language, genuinely mixed prose, insufficient prose, or uncertain language.",
     },
 }
+
+
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_URL_RE = re.compile(r"https?://\S+|www\.\S+")
+_MIN_SCRIPT_LETTERS = 10
+_RUSSIAN_FRACTION = 0.70
+
+
+def detect_russian_script(text):
+    """Local Cyrillic-predominance check (no API call).
+
+    Returns True when the reply prose is clearly Russian (Russian voice),
+    None when undecided — the caller then uses the Jev tiebreak.
+    Code blocks, inline code and URLs are ignored, mirroring the Jev prompt.
+    """
+    if not isinstance(text, str) or not text:
+        return None
+    prose = _CODE_FENCE_RE.sub(" ", text)
+    prose = _INLINE_CODE_RE.sub(" ", prose)
+    prose = _URL_RE.sub(" ", prose)
+    cyrillic = len(_CYRILLIC_RE.findall(prose))
+    latin = len(_LATIN_RE.findall(prose))
+    if cyrillic + latin < _MIN_SCRIPT_LETTERS:
+        return None
+    if cyrillic / (cyrillic + latin) >= _RUSSIAN_FRACTION:
+        return True
+    return None
 
 
 def _unique_fields(pairs):
@@ -88,6 +120,8 @@ class LanguageVoice:
 
     async def select(self, text, general_reference_id):
         fallback = general_reference_id, "unknown"
+        if detect_russian_script(text):
+            return RUSSIAN_REFERENCE_ID, "russian"
         if not self.api_key or self.client is None:
             return fallback
         try:
