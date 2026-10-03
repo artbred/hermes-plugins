@@ -1,0 +1,8 @@
+name: reminder
+version: 0.1.0
+description: "Gatekeeper ledger: derives checklists from request verbs, records tool evidence, and injects open checks back into the run."
+author: Artem + Hermes
+license: MIT
+kind: standalone
+requires_hermes: ">=0.21.3"
+tags: [gatekeeper, obligations, middleware]
