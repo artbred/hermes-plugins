@@ -147,9 +147,7 @@ struct RootView: View {
                     Text(model.selectedChatModel?.displayName ?? "Choose model")
                         .font(.body.weight(.medium))
                         .lineLimit(1)
-                    if model.isLoadingModels {
-                        ProgressView().controlSize(.small)
-                    } else if model.modelSelectionError != nil {
+                    if model.modelSelectionError != nil {
                         Image(systemName: "exclamationmark.circle")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -162,7 +160,7 @@ struct RootView: View {
             .disabled(!model.canChangeModel)
             .accessibilityLabel("Choose chat model")
             .accessibilityValue(model.selectedChatModel?.displayName ?? "No model selected")
-            .accessibilityHint(model.modelSelectionError ?? (model.isLoadingModels ? "Loading available models" : "Select a model for new messages"))
+            .accessibilityHint(model.modelSelectionError ?? "Select a model for new messages")
             .accessibilityIdentifier("chatModelButton")
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -224,10 +222,6 @@ private struct ChatModelPicker: View {
                 .disabled(!model.canChangeModel)
                 .accessibilityIdentifier("chatThinkingPicker")
                 .accessibilityValue(model.selectedThinkingLevel.displayName)
-                if model.isLoadingModels {
-                    ProgressView("Loading models…")
-                        .accessibilityIdentifier("chatModelsLoading")
-                }
                 if let error = model.modelSelectionError {
                     Section {
                         Label("Couldn’t load models", systemImage: "exclamationmark.triangle")

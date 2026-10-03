@@ -33,6 +33,7 @@ final class AppModel {
     @ObservationIgnored private var replyAcknowledgements: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var copyTask: Task<Void, Never>?
     @ObservationIgnored private let clientOverride: APIClient?
+    @ObservationIgnored private let modelInventoryCache: ModelInventoryCache
 
     var selectedChatID: String?
     var draft = ""
@@ -99,17 +100,29 @@ final class AppModel {
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var networkAvailable: Bool?
 
-    init(settings: AppSettings = AppSettings(), store: ChatStore = ChatStore(), recorder: Recorder = Recorder(), client: APIClient? = nil, notifications: ReplyNotifications? = nil, initialModelChoices: [HermesModelChoice] = [], initialModelChoice: HermesModelChoice? = nil) {
+    init(settings: AppSettings = AppSettings(), store: ChatStore = ChatStore(), recorder: Recorder = Recorder(), client: APIClient? = nil, notifications: ReplyNotifications? = nil, initialModelChoices: [HermesModelChoice]? = nil, initialModelChoice: HermesModelChoice? = nil) {
         clientOverride = client
         self.notifications = notifications ?? (client == nil ? .shared : nil)
         self.settings = settings
         observedSpeechVoice = settings.speechVoice
-        availableModels = initialModelChoices
-        availableModelsByID = Dictionary(initialModelChoices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let cache = ModelInventoryCache(directory: store.directory)
+        modelInventoryCache = cache
+        let inventory: HermesModelInventory
+        if initialModelChoices != nil || initialModelChoice != nil {
+            let choices = initialModelChoices ?? []
+            inventory = HermesModelInventory(
+                defaultModel: initialModelChoice.map { choice in choices.first { $0.id == choice.id } ?? choice },
+                suggestedModels: choices, availableModels: choices)
+        } else {
+            inventory = cache.load(serverURL: settings.serverURL, token: settings.token)
+                ?? HermesModelInventory(defaultModel: nil, suggestedModels: [], availableModels: [])
+        }
+        availableModels = inventory.availableModels
+        availableModelsByID = Dictionary(inventory.availableModels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         observedModelServerURL = settings.serverURL
         observedModelToken = settings.token
-        configuredDefaultModel = initialModelChoice.map { choice in initialModelChoices.first { $0.id == choice.id } ?? choice }
-        suggestedModels = initialModelChoices
+        configuredDefaultModel = inventory.defaultModel
+        suggestedModels = inventory.suggestedModels
         self.store = store
         self.recorder = recorder
         selectedChatID = store.chats.first?.id
@@ -160,11 +173,24 @@ final class AppModel {
     func refreshModelChoices() async {
         guard !isLoadingModels, let client = makeClient() else { return }
         let revision = modelInventoryRevision
+        let serverURL = settings.serverURL
+        let token = settings.token
         isLoadingModels = true
         defer { if revision == modelInventoryRevision { isLoadingModels = false } }
         do {
             let inventory = try await client.modelInventory()
-            guard !Task.isCancelled, revision == modelInventoryRevision else { return }
+            guard !Task.isCancelled, revision == modelInventoryRevision,
+                  settings.serverURL == serverURL, settings.token == token else { return }
+            // An injected transport can run tests without a configured connection.
+            // Only real, configured settings provide a durable cache scope.
+            if settings.isConfigured {
+                do {
+                    try modelInventoryCache.save(inventory, serverURL: serverURL, token: token)
+                } catch {
+                    show(error, title: "Could not save Hermes models")
+                    return
+                }
+            }
             availableModels = inventory.availableModels
             availableModelsByID = Dictionary(inventory.availableModels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             configuredDefaultModel = inventory.defaultModel
@@ -178,7 +204,8 @@ final class AppModel {
                 modelSelectionError = nil
             }
         } catch {
-            guard !Task.isCancelled, revision == modelInventoryRevision else { return }
+            guard !Task.isCancelled, revision == modelInventoryRevision,
+                  settings.serverURL == serverURL, settings.token == token else { return }
             modelSelectionError = "Could not load Hermes models: \(error.localizedDescription)"
         }
     }
@@ -572,12 +599,15 @@ final class AppModel {
             observedModelServerURL = settings.serverURL
             observedModelToken = settings.token
             modelInventoryRevision = UUID()
-            availableModels = []
-            availableModelsByID = [:]
-            configuredDefaultModel = nil
-            suggestedModels = []
+            let inventory = modelInventoryCache.load(serverURL: settings.serverURL, token: settings.token)
+                ?? HermesModelInventory(defaultModel: nil, suggestedModels: [], availableModels: [])
+            availableModels = inventory.availableModels
+            availableModelsByID = Dictionary(inventory.availableModels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            configuredDefaultModel = inventory.defaultModel
+            suggestedModels = inventory.suggestedModels
             isLoadingModels = false
             modelSelectionError = nil
+            adoptConfiguredDefaultForEmptyChat()
             Task { await refreshModelChoices() }
         }
         resumePending()
@@ -1039,7 +1069,12 @@ final class AppModel {
 
     /// Owned by RootView's foreground task; SwiftUI cancels it on suspension.
     func synchronizeChats() async {
-        await refreshModelChoices()
+        async let modelRefresh: Void = refreshModelChoices()
+        await synchronizeChatHistory()
+        await modelRefresh
+    }
+
+    private func synchronizeChatHistory() async {
         while !Task.isCancelled {
             await refreshChats()
             do { try await Task.sleep(for: .seconds(15)) }

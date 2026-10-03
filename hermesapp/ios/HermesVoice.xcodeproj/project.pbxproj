@@ -20,6 +20,7 @@
 		296133FB77A13AE588305D9B /* ResponseWebPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21DE2EAEABA0F0F820397700 /* ResponseWebPolicy.swift */; };
 		2A589753134C96EC8D979EC5 /* ResponseWebScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C130262EF52B4FEB052432F2 /* ResponseWebScripts.swift */; };
 		2AF262521492E0EA0868697A /* ResponseContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 511999D71CC1D7E44FB87D12 /* ResponseContentTests.swift */; };
+		2B1178CA110058A98E9F2365 /* ModelInventoryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C57F19BF6A909C133E549FD4 /* ModelInventoryCache.swift */; };
 		2E1FB2A97A10E96C7D26DA3F /* AttachmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60A286FE98631D796723DFEE /* AttachmentView.swift */; };
 		37AF00E7F042C93F8ECCC1A4 /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF1955C45D672B8B225C62B2 /* Keychain.swift */; };
 		3EEC56C13BF8601E2438B93A /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 854A144143858222E8AB9E83 /* ChatTests.swift */; };
@@ -50,6 +51,7 @@
 		C48D8BB034FEF82B5CC96BD5 /* Recorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F28EC8D027E67DA45B437DA /* Recorder.swift */; };
 		C8D434563EBFF9D4E4A02284 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E65E1DD157D2AF19B1D3BB /* APIClient.swift */; };
 		C98B8C1A809EFE9B7FE1B52D /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BB36C624F8D38FFA22276A /* SettingsView.swift */; };
+		DA84F93C041A4ADF3798E959 /* CachedChatOpeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 839C169C3B84D5EE44DE7370 /* CachedChatOpeningTests.swift */; };
 		DB0FF4727FF08ED21DD18B7D /* VoiceMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC518A21EF63E00ACBAD9DE /* VoiceMessageView.swift */; };
 		DDD1F11B34F9B3926A630505 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 98913E2AE1777903CEF0FDAF /* Assets.xcassets */; };
 		DFDDFDCEB7287D092621A669 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0394F5EA34F804478EF619C3 /* Chat.swift */; };
@@ -100,6 +102,7 @@
 		79377E4B3B75BF7D5083AEF7 /* HermesVoiceTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HermesVoiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C07B60615BCC1F4C4B8207D /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		809B89F99662C3629871B464 /* SpeechVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechVoice.swift; sourceTree = "<group>"; };
+		839C169C3B84D5EE44DE7370 /* CachedChatOpeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachedChatOpeningTests.swift; sourceTree = "<group>"; };
 		854A144143858222E8AB9E83 /* ChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTests.swift; sourceTree = "<group>"; };
 		85FAEEBEFC3989F35B3EE463 /* HermesModelChoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesModelChoice.swift; sourceTree = "<group>"; };
 		8868FFAEF65E148F05F184F8 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
@@ -112,6 +115,7 @@
 		C1044E809AF8960C0C6193E8 /* ReplyNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyNotificationTests.swift; sourceTree = "<group>"; };
 		C130262EF52B4FEB052432F2 /* ResponseWebScripts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseWebScripts.swift; sourceTree = "<group>"; };
 		C4E65E1DD157D2AF19B1D3BB /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		C57F19BF6A909C133E549FD4 /* ModelInventoryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelInventoryCache.swift; sourceTree = "<group>"; };
 		C940DA8B8172CF1D088B3E04 /* ThinkingLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingLevel.swift; sourceTree = "<group>"; };
 		CB34F2AE4F9BAAC91EAA5950 /* MobileResponseFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileResponseFormat.swift; sourceTree = "<group>"; };
 		CC8043294CA3F882A41D6BE2 /* ResponseWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseWebView.swift; sourceTree = "<group>"; };
@@ -170,6 +174,7 @@
 				7C07B60615BCC1F4C4B8207D /* AppSettings.swift */,
 				3CDD9F35AFF1AE35A61F213D /* ChatStore.swift */,
 				CF1955C45D672B8B225C62B2 /* Keychain.swift */,
+				C57F19BF6A909C133E549FD4 /* ModelInventoryCache.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -180,6 +185,7 @@
 				958FC77E4F62180ADAF5BCB7 /* APIClientTests.swift */,
 				78B88F23CBFB915174691E8E /* AppSettingsTests.swift */,
 				28A530613C3130AAE8F50488 /* AttachmentTests.swift */,
+				839C169C3B84D5EE44DE7370 /* CachedChatOpeningTests.swift */,
 				989FC999ACD874685C042935 /* ChatIsolationTests.swift */,
 				105FEB44C4FC775234BC3A17 /* ChatModelSelectionTests.swift */,
 				854A144143858222E8AB9E83 /* ChatTests.swift */,
@@ -407,6 +413,7 @@
 				61A6DD4B49547814F91F9860 /* HermesVoiceShortcuts.swift in Sources */,
 				37AF00E7F042C93F8ECCC1A4 /* Keychain.swift in Sources */,
 				5810326AD65E8A3BB6D3B8AD /* MobileResponseFormat.swift in Sources */,
+				2B1178CA110058A98E9F2365 /* ModelInventoryCache.swift in Sources */,
 				C48D8BB034FEF82B5CC96BD5 /* Recorder.swift in Sources */,
 				C35EF3DB60590023EDE654C7 /* ReplyNotifications.swift in Sources */,
 				6281302D952E45F9B8FD926D /* ReplyPlayer.swift in Sources */,
@@ -434,6 +441,7 @@
 				F5E58E27E07D8CB15C2A8C5E /* APIClientTests.swift in Sources */,
 				8E529FB099C1415A71CEC996 /* AppSettingsTests.swift in Sources */,
 				EB32AA580DB1FFDB4D5EF6B4 /* AttachmentTests.swift in Sources */,
+				DA84F93C041A4ADF3798E959 /* CachedChatOpeningTests.swift in Sources */,
 				18BE3524FC41CB9A4FB4C0D3 /* ChatIsolationTests.swift in Sources */,
 				704FD2E67E61EDC3467C491A /* ChatModelSelectionTests.swift in Sources */,
 				3EEC56C13BF8601E2438B93A /* ChatTests.swift in Sources */,
@@ -552,7 +560,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 35;
+				CURRENT_PROJECT_VERSION = 36;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -625,7 +633,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 35;
+				CURRENT_PROJECT_VERSION = 36;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_NS_ASSERTIONS = NO;

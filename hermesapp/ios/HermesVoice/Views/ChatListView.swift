@@ -73,14 +73,8 @@ struct ChatListView: View {
                     Button {
                         Task { await model.refreshChats() }
                     } label: {
-                        Group {
-                            if model.isRefreshing {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                        }
-                        .frame(width: 44, height: 44)
+                        Image(systemName: "arrow.clockwise")
+                            .frame(width: 44, height: 44)
                     }
                     .disabled(model.isRefreshing)
                     .accessibilityLabel("Refresh history")
