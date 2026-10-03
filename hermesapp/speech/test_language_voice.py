@@ -2,10 +2,9 @@ import asyncio
 
 import httpx
 import pytest
-
-import language_voice
-from fish_tts import DEFAULT_REFERENCE_ID
-from language_voice import (
+from hermes_fish_speech import language_voice
+from hermes_fish_speech.fish_tts import DEFAULT_REFERENCE_ID
+from hermes_fish_speech.language_voice import (
     MAX_RESPONSE_BYTES,
     RUSSIAN_REFERENCE_ID,
     LanguageVoice,

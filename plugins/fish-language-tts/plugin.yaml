@@ -1,0 +1,17 @@
+manifest_version: 2
+name: fish-language-tts
+version: 1.0.0
+description: "Paid Fish s2.1-pro speech with optional Jev language-aware Russian voice routing."
+author: Hermes Fish speech contributors
+kind: backend
+requires_env:
+  - FISH_API_KEY
+optional_env:
+  - OPENROUTER_API_KEY
+python_dependencies:
+  - "httpx>=0.28,<1"
+config_schema:
+  general_voice:
+    type: str
+    default: "933563129e564b19a115bedd57b7406a"
+    description: "32-hex Fish reference ID for English and advisory-classifier fallback."

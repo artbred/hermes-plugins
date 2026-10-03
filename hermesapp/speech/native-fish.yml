@@ -1,11 +1,9 @@
+plugins:
+  enabled:
+    - fish-language-tts
+
 tts:
-  provider: fish
-  providers:
-    fish:
-      type: command
-      command: /opt/hermes-speech/.venv/bin/python /opt/hermes-speech/fish_tts.py --api-key-file /etc/hermes-speech/fish-key --language-api-key-file /etc/hermes-speech/jev-key {input_path} {output_path} {voice} {model} {speed}
-      output_format: mp3
-      voice: 933563129e564b19a115bedd57b7406a
-      model: s2.1-pro
-      env_passthrough:
-        - FISH_API_KEY
+  provider: fish-language
+  voice: 933563129e564b19a115bedd57b7406a
+  model: s2.1-pro
+  output_format: mp3

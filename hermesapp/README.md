@@ -69,7 +69,7 @@ Only server-owned conversation history and titles are shared. Recordings, downlo
 
 Enable Hermes's native `api_server` platform and set `API_SERVER_KEY`, `API_SERVER_HOST`, and `API_SERVER_PORT` in the Hermes environment. Keep TLS/authentication in front of it. Enable the native dashboard backend for its speech routes, but **do not expose its administrative API** to the phone's public hostname.
 
-The phone uses native Hermes transcription and a narrowly scoped authenticated Fish speech endpoint. Native Hermes and mobile retain Fish Official **Sarah** (`933563129e564b19a115bedd57b7406a`) as the general voice with explicitly paid **2.1 Pro** (`s2.1-pro`). Jev selects the Russian voice for confident Russian replies and the general voice for English or fallback; the independent shared implementation is in `speech/`, not the retired plugins. Mobile Settings → Reply voice changes the phone's general voice without changing the shared native default. Provider keys stay server-side. Language-aware mobile playback requires build 30; installed build 29 keeps explicit voice synthesis until the app is updated. For the installed local-command STT path, explicitly set:
+The phone uses native Hermes transcription and a narrowly scoped authenticated Fish speech endpoint. Native Hermes and mobile retain Fish Official **Sarah** (`933563129e564b19a115bedd57b7406a`) as the general voice with explicitly paid **2.1 Pro** (`s2.1-pro`). Jev selects the Russian voice for confident Russian replies and the general voice for English or fallback. The canonical implementation now belongs to the real [`fish-language-tts`](../plugins/fish-language-tts/) provider plugin; `speech/` is the mobile HTTP adapter and installs its shared `hermes_fish_speech` package. This repository migration has not been installed on active hosts: `kuzin` still runs the previously deployed command/service implementation until explicitly authorized. Mobile Settings → Reply voice changes the phone's general voice without changing the shared native default. Provider keys stay server-side. Language-aware mobile playback requires build 30; installed build 29 keeps explicit voice synthesis until the app is updated. For the installed local-command STT path, explicitly set:
 
 ```yaml
 stt:
@@ -79,7 +79,7 @@ stt:
     language: auto
 ```
 
-An empty language setting on this native path can fall back to English. Fish transcription remains on the existing native route; selectable paid synthesis is implemented in `speech/`, preserving the same mobile URL/API token and keeping desktop administration private. See [`docs/API.md`](docs/API.md#native-speech) for deployment and cache identity details.
+An empty language setting on this native path can fall back to English. Fish transcription remains on the existing native route. The plugin's shared package implements paid speech/language routing; `speech/` supplies the authenticated mobile adapter, preserving the same URL/API token and private administrative boundary. See [`docs/API.md`](docs/API.md#native-speech) for provider installation, deferred cutover, and cache identity details.
 
 ## Delivery and persistence
 

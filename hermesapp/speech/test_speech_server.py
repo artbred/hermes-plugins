@@ -4,18 +4,71 @@ import json
 import httpx
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-
-import fish_tts
-from fish_tts import DEFAULT_REFERENCE_ID, MODEL, FishSpeech
-from language_voice import (
+from hermes_fish_speech import fish_tts
+from hermes_fish_speech.fish_tts import DEFAULT_REFERENCE_ID, MODEL, FishSpeech
+from hermes_fish_speech.language_voice import (
     RUSSIAN_REFERENCE_ID,
     LanguageVoice,
 )
+
 from speech_server import MAX_REQUEST_BYTES, Config, create_app
 
 MOCK_MP3 = b"ID3" + b"\x00" * 197
 AUTH = {"Authorization": "Bearer mobile-secret"}
 CUSTOM_VOICE = "abcdef0123456789abcdef0123456789"
+
+
+@pytest.fixture(autouse=True)
+def no_live_advisor_environment(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+
+def test_config_reads_only_named_systemd_credentials(tmp_path, monkeypatch):
+    (tmp_path / "api-key").write_text("mobile-secret\n")
+    (tmp_path / "fish-key").write_text("provider-secret\n")
+    (tmp_path / "jev-key").write_text("advisor-secret\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    monkeypatch.delenv("API_SERVER_KEY", raising=False)
+    monkeypatch.delenv("FISH_API_KEY", raising=False)
+    config = Config.from_environment()
+    assert config.api_key == "mobile-secret"
+    assert config.fish_key == "provider-secret"
+    assert config.jev_key == "advisor-secret"
+    assert "mobile-secret" not in repr(config)
+    assert "provider-secret" not in repr(config)
+    assert "advisor-secret" not in repr(config)
+
+
+def test_existing_environment_credentials_are_supported(monkeypatch):
+    monkeypatch.setenv("API_SERVER_KEY", "mobile-secret")
+    monkeypatch.setenv("FISH_API_KEY", "provider-secret")
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    assert Config.from_environment() == Config("mobile-secret", "provider-secret")
+
+
+
+def test_config_optional_named_jev_credential_never_breaks_existing_synthesis(tmp_path, monkeypatch):
+    (tmp_path / "api-key").write_text("mobile-secret")
+    (tmp_path / "fish-key").write_text("provider-secret")
+    (tmp_path / "openrouter-key").write_text("wrong-named-secret")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    monkeypatch.delenv("API_SERVER_KEY", raising=False)
+    monkeypatch.delenv("FISH_API_KEY", raising=False)
+    assert Config.from_environment() == Config("mobile-secret", "provider-secret")
+    (tmp_path / "jev-key").write_bytes(b"\xff")
+    assert Config.from_environment() == Config("mobile-secret", "provider-secret")
+
+
+def test_config_openrouter_environment_overrides_named_credential_and_stays_private(tmp_path, monkeypatch):
+    (tmp_path / "jev-key").write_text("stale-advisor-secret")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("API_SERVER_KEY", "mobile-secret")
+    monkeypatch.setenv("FISH_API_KEY", "provider-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "advisor-env-secret")
+    config = Config.from_environment()
+    assert config.jev_key == "advisor-env-secret"
+    assert "advisor-env-secret" not in repr(config)
 
 
 @pytest.fixture

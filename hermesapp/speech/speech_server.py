@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from aiohttp import web
-
-from fish_tts import (
+from hermes_fish_speech.fish_tts import (
     DEFAULT_REFERENCE_ID,
     MODEL,
     FishSpeech,
@@ -19,7 +18,7 @@ from fish_tts import (
     validate_reference_id,
     validate_text,
 )
-from language_voice import LanguageVoice
+from hermes_fish_speech.language_voice import LanguageVoice
 
 MAX_REQUEST_BYTES = 1024 * 1024
 

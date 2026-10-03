@@ -4,14 +4,20 @@ version = "1.0.0"
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.12,<4",
+    "hermes-fish-speech",
     "httpx>=0.28,<1",
 ]
+
+[tool.uv.sources]
+hermes-fish-speech = { path = "../../plugins/fish-language-tts" }
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 110

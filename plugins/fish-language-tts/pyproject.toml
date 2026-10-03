@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75,<83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-fish-speech"
+version = "1.0.0"
+description = "Bounded paid Fish speech engine and optional Jev language routing"
+requires-python = ">=3.12"
+dependencies = ["httpx>=0.28,<1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.11,<1"]
+
+[tool.setuptools]
+packages = ["hermes_fish_speech"]
+include-package-data = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+# Hermes installs hyphenated plugin folders under a slugged Python namespace.
+"__init__.py" = ["N999"]
+"hermes_fish_speech/__init__.py" = ["N999"]

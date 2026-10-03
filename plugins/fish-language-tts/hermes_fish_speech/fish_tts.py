@@ -1,19 +1,12 @@
-#!/usr/bin/env python3
-"""Paid Fish speech synthesis and Hermes command-provider entry point."""
+"""Bounded paid Fish speech synthesis, independent of the Hermes runtime."""
 
-import argparse
 import asyncio
 import math
-import os
 import re
-import stat
-import sys
 import tempfile
 from pathlib import Path
 
 import httpx
-
-from language_voice import LanguageVoice
 
 API = "https://api.fish.audio/v1/tts"
 MODEL = "s2.1-pro"
@@ -23,7 +16,6 @@ MAX_TEXT_CHARACTERS = 64000
 MAX_INPUT_BYTES = 256 * 1024
 MAX_AUDIO_BYTES = 32 * 1024 * 1024
 MIN_AUDIO_BYTES = 100
-MAX_API_KEY_BYTES = 4096
 
 
 class SpeechError(Exception):
@@ -54,6 +46,15 @@ def validate_text(text):
     if encoded_size > MAX_INPUT_BYTES:
         raise ValueError("text exceeds the input byte limit")
     return text
+
+
+def validate_speed(speed):
+    if speed is not None and (
+        isinstance(speed, bool) or not isinstance(speed, (int, float))
+        or not math.isfinite(speed) or not 0.5 <= speed <= 2.0
+    ):
+        raise ValueError("speed must be a finite number from 0.5 to 2.0")
+    return speed
 
 
 def split_text(text):
@@ -169,11 +170,7 @@ class FishSpeech:
     async def synthesize(self, text, reference_id=DEFAULT_REFERENCE_ID, model=MODEL, speed=None):
         validate_reference_id(reference_id)
         validate_model(model)
-        if speed is not None and (
-            isinstance(speed, bool) or not isinstance(speed, (int, float))
-            or not math.isfinite(speed) or not 0.5 <= speed <= 2.0
-        ):
-            raise ValueError("speed must be a finite number from 0.5 to 2.0")
+        validate_speed(speed)
         parts = split_text(text)
         chunks = []
         size = 0
@@ -183,123 +180,3 @@ class FishSpeech:
             size += len(audio)
         return chunks[0] if len(chunks) == 1 else await combine_mp3(chunks)
 
-
-def command_arguments(argv=None, environment=None):
-    environment = os.environ if environment is None else environment
-    parser = argparse.ArgumentParser(description="Hermes paid Fish Audio command provider")
-    parser.add_argument("--api-key-file", type=Path)
-    parser.add_argument("--language-api-key-file", type=Path)
-    parser.add_argument("input_path", type=Path)
-    parser.add_argument("output_path", type=Path)
-    parser.add_argument("voice", nargs="?", default="")
-    parser.add_argument("model", nargs="?", default="")
-    parser.add_argument("speed", nargs="?", default="")
-    args = parser.parse_args(argv)
-    args.voice = validate_reference_id(
-        args.voice or environment.get("FISH_REFERENCE_ID", "") or DEFAULT_REFERENCE_ID
-    )
-    args.model = validate_model(args.model or environment.get("FISH_TTS_MODEL_HEADER", "") or MODEL)
-    try:
-        args.speed = float(args.speed) if args.speed else None
-    except ValueError:
-        raise ValueError("speed must be a finite number from 0.5 to 2.0") from None
-    return args
-
-
-def command_api_key(args, environment=None):
-    """Use an explicitly configured private key file, otherwise inherited FISH_API_KEY."""
-    if args.api_key_file is None:
-        environment = os.environ if environment is None else environment
-        return environment.get("FISH_API_KEY", "")
-    return private_api_key(args.api_key_file)
-
-
-def private_api_key(path):
-    """Read a bounded, owned, private regular file without following symlinks or blocking on FIFOs."""
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(descriptor, "rb") as source:
-            metadata = os.fstat(source.fileno())
-            if (
-                not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) & 0o077
-            ):
-                raise SpeechError("Fish speech credential file must be private and owned by this user")
-            raw = source.read(MAX_API_KEY_BYTES + 1)
-    except OSError:
-        raise SpeechError("Fish speech credential file is unavailable") from None
-    if len(raw) > MAX_API_KEY_BYTES:
-        raise SpeechError("Fish speech credential file exceeds the credential size limit")
-    try:
-        key = raw.decode("utf-8").strip()
-    except UnicodeDecodeError:
-        raise SpeechError("Fish speech credential file is invalid") from None
-    if not key or "\n" in key or "\r" in key:
-        raise SpeechError("Fish speech credential file is invalid")
-    return key
-
-
-def command_language_api_key(args, environment=None):
-    """Unavailable optional Jev credentials abstain, never overriding an explicit file with env."""
-    if args.language_api_key_file is None:
-        environment = os.environ if environment is None else environment
-        return environment.get("OPENROUTER_API_KEY", "")
-    try:
-        return private_api_key(args.language_api_key_file)
-    except SpeechError:
-        return ""
-
-
-async def run_command(args, api_key):
-    # Bound the file read before decoding. Do not strip or silently truncate the input.
-    with args.input_path.open("rb") as source:
-        raw = source.read(MAX_INPUT_BYTES + 1)
-    if len(raw) > MAX_INPUT_BYTES:
-        raise ValueError("text exceeds the input byte limit")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ValueError("text must contain valid UTF-8") from None
-    validate_text(text)
-    speech = FishSpeech(api_key)
-    language = LanguageVoice(command_language_api_key(args))
-    try:
-        reference_id, _ = await language.select(text, args.voice)
-        audio = await speech.synthesize(text, reference_id, args.model, args.speed)
-    finally:
-        try:
-            await language.close()
-        finally:
-            await speech.close()
-    # Leave no partial output, even when synthesis/assembly or a later chunk fails.
-    args.output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=args.output_path.parent, prefix=".fish-speech-", delete=False) as out:
-        temporary = Path(out.name)
-        try:
-            out.write(audio)
-            out.flush()
-            os.fsync(out.fileno())
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-    try:
-        temporary.replace(args.output_path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def main(argv=None):
-    try:
-        args = command_arguments(argv)
-        asyncio.run(run_command(args, command_api_key(args)))
-    except (ValueError, SpeechError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-    except OSError:
-        print("Fish speech could not read input or write audio", file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
