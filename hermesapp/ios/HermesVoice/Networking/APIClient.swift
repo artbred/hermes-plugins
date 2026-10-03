@@ -31,14 +31,11 @@ struct RunEvent: Decodable, Sendable {
     var type: String
     var text: String?
     var command: String?
-    var tool: String?
     var choices: [String]?
     var id: String?
-    var alreadyStreamed: Bool
 
     enum CodingKeys: String, CodingKey {
-        case type = "event", text, delta, output, error, command, tool, choices, requestID = "request_id"
-        case alreadyStreamed = "already_streamed"
+        case type = "event", text, delta, output, error, command, choices, requestID = "request_id"
     }
 
     init(from decoder: any Decoder) throws {
@@ -49,10 +46,8 @@ struct RunEvent: Decodable, Sendable {
             ?? values.decodeIfPresent(String.self, forKey: .output)
             ?? values.decodeIfPresent(String.self, forKey: .error)
         command = try values.decodeIfPresent(String.self, forKey: .command)
-        tool = try values.decodeIfPresent(String.self, forKey: .tool)
         choices = try values.decodeIfPresent([String].self, forKey: .choices)
         id = try values.decodeIfPresent(String.self, forKey: .requestID)
-        alreadyStreamed = try values.decodeIfPresent(Bool.self, forKey: .alreadyStreamed) ?? false
     }
 }
 

@@ -18,7 +18,7 @@ The iOS app is named **Hermes** (`com.artbred.hermesapp`), distinct from the pre
 - Agent replies render as inline mobile HTML interfaces: cards, tables, task lists, collapsible details, and local interactive controls. Source links are underlined and open in an in-app browser. Older Markdown replies remain readable; speech, copying, and search use human text rather than markup.
 - **New Voice Chat** in Shortcuts/Siri/Action Button opens the app, creates a new chat, and records. Invoke it again while recording to send that take without creating another chat. The in-app microphone records into the current chat.
 - Recording has one **Send** button; tapping elsewhere inside the app immediately discards the recording and consumes that tap.
-- Conversation titles are generated asynchronously by the auxiliary model, not copied from the opening sentence. Message headers/timestamps are omitted; an assistant-side activity indicator shows the current processing step.
+- Conversation titles are generated asynchronously by the auxiliary model, not copied from the opening sentence. Message headers/timestamps, Hermes/Thinking labels, tool names and interim tool commentary are omitted. A waiting reply shows three dots, then gradually reveals rich text in that same position. Cached replies show immediately; approval prompts and Stop/error outcomes remain available.
 
 ```mermaid
 flowchart LR
@@ -90,7 +90,7 @@ Chats, messages, recordings, and synthesized replies live in Application Support
 
 The native voice flow is multiple requests, not an atomic audio-and-run endpoint. iOS grants only limited background execution; if it suspends the app before transcription/run submission finishes, reopen the app to resume. An accepted run continues on Hermes without the phone. Failed messages show an error and a Retry control. Retrying a terminal run is an explicit new attempt and can repeat actions already performed by the agent. Native idempotency is retention-bounded (24 hours on the configured server), not a permanent exactly-once guarantee.
 
-While processing, Hermes shows its activity alongside the streamed reply. The composer's square Stop control requests interruption and shows **Stopping…** until the server confirms the result; it also handles a stop requested during submission. Stop intent survives relaunch. Completed actions are not rolled back.
+While processing, only three dots occupy the upcoming reply's position. New replies reveal text progressively in that same row, including fast completed answers; there is no separate activity block above them. The composer's square Stop control requests interruption and shows **Stopping…** until the server confirms the result; it also handles a stop requested during submission. Stop intent survives relaunch. Completed actions are not rolled back.
 
 Pending approvals show **Review request** instead of automatically blocking navigation. Close or swipe away the review to keep using another chat; that does not approve, deny, or stop the pending request. The chat list shows which conversations are in progress or need approval. One outstanding turn per local chat is intentional; native requests targeting the same conversation also serialize. The VPS admission limit is 10 concurrent API runs, so server capacity or provider limits can still delay/reject additional work.
 

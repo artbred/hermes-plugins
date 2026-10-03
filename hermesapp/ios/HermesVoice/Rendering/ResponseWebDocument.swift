@@ -1,3 +1,4 @@
+import Foundation
 import Network
 import WebKit
 
@@ -44,11 +45,12 @@ enum ResponseWebDocument {
     """
 
     /// - Parameter generation: Stamped on `<html>` for the trusted instrumentation to include in every message.
-    static func html(fragment: String, generation: Int, mode: Mode) -> String {
+    static func html(fragment: String, generation: Int, mode: Mode, animateTyping: Bool = false) -> String {
+        // Animated documents start empty. The trusted ready handshake installs the masked fragment before reveal.
         "<!DOCTYPE html><html data-hermes-generation=\"\(generation)\" data-hermes-mode=\"\(mode.rawValue)\">"
             + head
             + "<body><div id=\"hermes-root\" dir=\"auto\">"
-            + fragment
+            + (animateTyping ? "" : fragment)
             + "</div></body></html>"
     }
 }

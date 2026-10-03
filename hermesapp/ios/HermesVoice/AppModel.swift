@@ -59,7 +59,6 @@ final class AppModel {
     var connectionMessage: String?
     private var approvals: [String: RunApproval] = [:]
     private var liveResponses: [String: String] = [:]
-    private var activeTools: [String: String] = [:]
     @ObservationIgnored private var streamBuffers: [String: String] = [:]
     @ObservationIgnored private var streamFlushTasks: [String: Task<Void, Never>] = [:]
 
@@ -245,7 +244,6 @@ final class AppModel {
         selectedChat?.messages.first { $0.role == .user && $0.stage.isPending }
     }
     var isStopping: Bool { activeMessage.map { $0.stopRequested == true && $0.error == nil } ?? false }
-    var activeTool: String? { selectedChatID.flatMap { activeTools[$0] } }
     var playingMessageID: String? { player.messageID }
     var isAudioPlaying: Bool { player.isPlaying }
     var liveResponse: String { selectedChatID.flatMap { liveResponses[$0] } ?? "" }
@@ -575,7 +573,6 @@ final class AppModel {
         stopTasks.removeValue(forKey: chatID)?.cancel()
         clearStreaming(chatID)
         approvals[chatID] = nil
-        activeTools[chatID] = nil
     }
 
     func respondToApproval(_ choice: String, approval: RunApproval) async {
@@ -788,7 +785,6 @@ final class AppModel {
             if workerIDs[chatID] == workerID {
                 clearStreaming(chatID)
                 approvals[chatID] = nil
-                activeTools[chatID] = nil
             }
         }
         while !Task.isCancelled {
@@ -824,12 +820,6 @@ final class AppModel {
         switch event.type {
         case "message.delta":
             if let text = event.text { appendStreaming(text, chatID: chatID) }
-        case "message.interim":
-            if !event.alreadyStreamed, let text = event.text { appendStreaming(text + "\n\n", chatID: chatID) }
-        case "tool.started":
-            if let tool = event.tool { activeTools[chatID] = tool }
-        case "tool.completed":
-            if activeTools[chatID] == event.tool { activeTools[chatID] = nil }
         case "approval.request":
             guard message.stopRequested != true else { return }
             approvals[chatID] = RunApproval(id: event.id ?? runID, runID: runID, chatID: chatID, command: event.command ?? "Hermes requests permission to continue.", choices: event.choices ?? ["once", "deny"], requestID: event.id)
@@ -855,7 +845,6 @@ final class AppModel {
         }
         clearStreaming(chatID)
         approvals[chatID] = nil
-        activeTools[chatID] = nil
         stopTaskIDs[chatID] = nil
         stopTasks.removeValue(forKey: chatID)?.cancel()
         if let reply = store.chat(id: chatID)?.messages.first(where: { $0.id == replyID }), reply.needsSpeech {

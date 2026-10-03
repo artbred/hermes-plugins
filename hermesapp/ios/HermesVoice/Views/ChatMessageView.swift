@@ -4,6 +4,12 @@ import QuickLook
 struct ChatMessageView: View {
     @Bindable var model: AppModel
     let message: ChatMessage
+    var responseContent: String? = nil
+    var isResponseStreaming = false
+    var animateResponseTyping = false
+    var onResponseTypingFinished: (@MainActor () -> Void)? = nil
+    var onResponseContentVisible: (@MainActor () -> Void)? = nil
+    var showsActions = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var previewURL: URL?
@@ -20,12 +26,13 @@ struct ChatMessageView: View {
         isUser && (message.stage == .failed || message.stage == .interrupted)
     }
     private var hasActions: Bool { (!isVoice && !message.text.isEmpty) || canRetry }
+    private var displayedText: String { responseContent ?? message.text }
 
     var body: some View {
         VStack(alignment: isUser ? .trailing : .leading, spacing: 10) {
             if isVoice {
                 VoiceMessageView(message: message)
-            } else if !message.text.isEmpty {
+            } else if !displayedText.isEmpty {
                 messageText
             }
             ForEach(message.files) { attachment in
@@ -41,7 +48,7 @@ struct ChatMessageView: View {
                     .foregroundStyle(wasStopped ? Color.secondary : Color.red)
                     .textSelection(.enabled)
             }
-            if hasActions {
+            if showsActions && hasActions {
                 actionLayout {
                     if !isUser && !message.isBrainDump && !message.text.isEmpty {
                         Button {
@@ -99,7 +106,13 @@ struct ChatMessageView: View {
                 .padding(16)
                 .background(HermesPalette.control(colorScheme), in: RoundedRectangle(cornerRadius: 22))
         } else {
-            HTMLResponseView(content: message.text)
+            HTMLResponseView(
+                content: displayedText,
+                isStreaming: isResponseStreaming,
+                animateTyping: animateResponseTyping,
+                onTypingFinished: onResponseTypingFinished,
+                onContentVisible: onResponseContentVisible
+            )
                 .accessibilityIdentifier("htmlReply-\(message.id)")
         }
     }

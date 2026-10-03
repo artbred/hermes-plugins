@@ -319,11 +319,11 @@ struct StopRunTests {
         try store.save(other)
         let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.selectChat(other.id)
-        let otherConnected = await eventually { model.activeTool == "search" }
+        let otherConnected = await eventually { server.requests.contains { $0.path == "/v1/runs/unaffected-run/events" } }
         try #require(otherConnected)
         model.selectChat(missing.id)
         let missingConnected = await eventually {
-            model.activeTool == "terminal" && server.requests.contains { $0.path == "/v1/runs/missing-stop" }
+            server.requests.contains { $0.path == "/v1/runs/missing-stop" }
         }
         try #require(missingConnected)
         model.stopRun()
@@ -336,14 +336,12 @@ struct StopRunTests {
         #expect(cancelledRequests)
         let busy = model.isBusy
         let stopping = model.isStopping
-        let activeTool = model.activeTool
         let stopAcknowledged = store.chat(id: missing.id)?.messages.first?.stopAcknowledged
         let restored = ChatStore(directory: directory)
         let savedStage = restored.chat(id: missing.id)?.messages.first?.stage.rawValue
         let savedAttemptClosed = restored.chat(id: missing.id)?.messages.first?.runWasTerminal
         let otherStage = store.chat(id: other.id)?.messages.first?.stage.rawValue
         #expect(!busy && !stopping)
-        #expect(activeTool == nil)
         #expect(stopAcknowledged != true)
         #expect(savedStage == "failed")
         #expect(savedAttemptClosed == true)
@@ -352,8 +350,6 @@ struct StopRunTests {
         let deleted = store.chat(id: missing.id) == nil
         #expect(deleted)
         model.selectChat(other.id)
-        let otherTool = model.activeTool
-        #expect(otherTool == "search")
         otherStatus.resolve(.json(200, #"{"run_id":"unaffected-run","status":"completed","output":"Unaffected reply"}"#))
         let otherCompleted = await eventually { store.chat(id: other.id)?.messages.last?.text == "Unaffected reply" }
         try #require(otherCompleted)
@@ -575,78 +571,49 @@ struct StopRunTests {
         #expect(agentRequests == 0)
     }
 
-    @Test("Real tool events are scoped to the selected chat and cleared at terminal")
-    func tracksNativeToolActivity() async throws {
-        let directory = makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let terminal = Mutex(false)
-        let server = StubServer { request in
-            switch request.path {
-            case "/v1/runs/tool-run/events":
-                return .stream(chunks: [Data("data: {\"event\":\"tool.started\",\"tool\":\"terminal\",\"preview\":\"private arguments\"}\n\n".utf8)], finish: false)
-            case "/v1/runs/tool-run":
-                let status = terminal.withLock { $0 } ? "completed" : "running"
-                return .json(200, "{\"run_id\":\"tool-run\",\"status\":\"\(status)\"}")
-            default: return .json(404, #"{"detail":"Not found"}"#)
-            }
-        }
-        let store = ChatStore(directory: directory)
-        let chat = Chat(messages: [ChatMessage(role: .user, text: "Use a tool", stage: .running, runID: "tool-run")], titleGenerated: true)
-        try store.save(chat)
-        let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
-        model.scenePhaseChanged(.active)
-        let started = await eventually { model.activeTool == "terminal" }
-        try #require(started)
-        model.newChat()
-        let otherChatTool = model.activeTool
-        #expect(otherChatTool == nil)
-        model.selectChat(chat.id)
-        let selectedTool = model.activeTool
-        #expect(selectedTool == "terminal")
-        terminal.withLock { $0 = true }
-        let completed = await eventually { store.chat(id: chat.id)?.messages.first?.stage == .completed }
-        try #require(completed)
-        let finalTool = model.activeTool
-        #expect(finalTool == nil)
-    }
-
-    @Test("Tool completion clears activity while the run continues")
-    func clearsCompletedTool() async throws {
+    @Test("Tool events and interim commentary never enter reply text while answers and approvals remain available")
+    func hidesInformationalActivity() async throws {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let terminal = Mutex(false)
         let events = """
-        data: {"event":"tool.started","tool":"terminal"}
+        data: {"event":"tool.started","tool":"terminal","preview":"private arguments"}
+
+        data: {"event":"message.interim","text":"Using a private tool","already_streamed":false}
 
         data: {"event":"tool.completed","tool":"terminal"}
 
-        data: {"event":"message.delta","delta":"Still responding"}
+        data: {"event":"message.delta","delta":"Public answer"}
+
+        data: {"event":"approval.request","request_id":"protected-action","command":"Confirm protected action","choices":["once","deny"]}
 
 
         """
         let server = StubServer { request in
             switch request.path {
-            case "/v1/runs/finished-tool/events":
+            case "/v1/runs/quiet-reply/events":
                 return .stream(chunks: [Data(events.utf8)], finish: false)
-            case "/v1/runs/finished-tool":
-                let status = terminal.withLock { $0 } ? "completed" : "running"
-                return .json(200, "{\"run_id\":\"finished-tool\",\"status\":\"\(status)\"}")
+            case "/v1/runs/quiet-reply":
+                return terminal.withLock { $0 }
+                    ? .json(200, #"{"run_id":"quiet-reply","status":"completed","output":"Authoritative answer"}"#)
+                    : .json(200, #"{"run_id":"quiet-reply","status":"running"}"#)
             default: return .json(404, #"{"detail":"Not found"}"#)
             }
         }
         let store = ChatStore(directory: directory)
-        let chat = Chat(messages: [ChatMessage(role: .user, text: "Use a tool", stage: .running, runID: "finished-tool")], titleGenerated: true)
+        let request = ChatMessage(role: .user, text: "Quiet response", stage: .running, runID: "quiet-reply")
+        let chat = Chat(messages: [request], titleGenerated: true)
         try store.save(chat)
         let model = AppModel(store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
         model.scenePhaseChanged(.active)
-        let responding = await eventually { model.liveResponse == "Still responding" }
-        try #require(responding)
-        let tool = model.activeTool
-        let busy = model.isBusy
-        #expect(tool == nil)
-        #expect(busy)
+        try #require(await eventually { model.liveResponse == "Public answer" && model.approval?.requestID == "protected-action" })
+        #expect(model.approval?.command == "Confirm protected action")
+        #expect(model.isBusy)
+        #expect(store.chat(id: chat.id)?.messages.map(\.text) == ["Quiet response"])
         terminal.withLock { $0 = true }
-        let completed = await eventually { store.chat(id: chat.id)?.messages.first?.stage == .completed }
-        try #require(completed)
+        try #require(await eventually { store.chat(id: chat.id)?.messages.last?.text == "Authoritative answer" })
+        #expect(model.liveResponse.isEmpty)
+        #expect(model.approval == nil)
+        #expect(store.chat(id: chat.id)?.messages.last?.replyTo == request.id)
     }
 }

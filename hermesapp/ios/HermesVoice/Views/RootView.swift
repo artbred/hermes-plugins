@@ -430,6 +430,35 @@ private struct ChatTranscript: View {
     let reviewApproval: (RunApproval) -> Void
     @State private var following = TranscriptFollowing()
     @State private var scrollPosition = ScrollPosition(edge: .bottom)
+    @State private var mountedAt = Date.now
+
+    private struct Row: Identifiable {
+        let id: String
+        let message: ChatMessage?
+        let request: ChatMessage?
+        let isNewReply: Bool
+        var isCurrentRequest = false
+    }
+
+    private var rows: [Row] {
+        let messageIDs = Set(chat.messages.map(\.id))
+        let activeRequest = model.selectedChatID == chat.id ? model.activeMessage : nil
+        var result = chat.messages.map { message in
+            Row(
+                id: message.id, message: message, request: nil,
+                isNewReply: message.role == .assistant && message.replyTo != nil && message.createdAt >= mountedAt
+            )
+        }
+        for request in chat.messages where request.role == .user && request.stage.isPending {
+            let replyID = "\(request.id)-reply-\(request.attempt)"
+            guard !messageIDs.contains(replyID) else { continue }
+            result.append(Row(
+                id: replyID, message: nil, request: request, isNewReply: true,
+                isCurrentRequest: activeRequest?.id == request.id && activeRequest?.attempt == request.attempt
+            ))
+        }
+        return result
+    }
 
     var body: some View {
         GeometryReader { viewport in
@@ -441,13 +470,16 @@ private struct ChatTranscript: View {
                         .frame(height: max(0, viewport.size.height - 24))
                         .accessibilityHidden(true)
                     LazyVStack(alignment: .leading, spacing: 28) {
-                        ForEach(chat.messages) { message in
-                            ChatMessageView(model: model, message: message)
-                                .id(message.id)
-                        }
-                        // `model` activity describes the selected chat; an outgoing transcript must not show it.
-                        if model.selectedChatID == chat.id && chat.hasPendingMessages {
-                            AssistantActivityView(model: model, reviewApproval: reviewApproval)
+                        ForEach(rows) { row in
+                            if row.isNewReply {
+                                AssistantReplyView(
+                                    model: model, replyID: row.id, isCurrentRequest: row.isCurrentRequest,
+                                    message: row.message, request: row.request,
+                                    reviewApproval: reviewApproval
+                                )
+                            } else if let message = row.message {
+                                ChatMessageView(model: model, message: message)
+                            }
                         }
                     }
                     .frame(maxWidth: 760)
@@ -491,114 +523,6 @@ private struct ChatTranscript: View {
     }
 }
 
-private struct AssistantActivityView: View {
-    @Bindable var model: AppModel
-    let reviewApproval: (RunApproval) -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .subheadline) private var indicatorWidth: CGFloat = 18
-    @ScaledMetric(relativeTo: .subheadline) private var indicatorHeight: CGFloat = 22
-
-    private var stopNeedsRetry: Bool {
-        model.activeMessage?.stopRequested == true && !model.isStopping
-    }
-
-    private var processingStatus: String {
-        if model.isStopping {
-            return model.activeMessage?.stage == .savingMemory ? "Finishing save…" : "Stopping…"
-        }
-        if stopNeedsRetry { return "Stop not confirmed" }
-        if model.approval != nil { return "Needs approval" }
-        switch model.activeMessage?.stage {
-        case .queued: return "Waiting to send…"
-        case .transcribing: return "Transcribing recording…"
-        case .classifying: return "Understanding your message…"
-        case .savingMemory: return "Saving thought…"
-        case .uploading: return "Uploading files…"
-        case .submitting: return "Sending to Hermes…"
-        case .running: return model.liveResponse.isEmpty ? "Thinking…" : "Replying…"
-        default: return "Processing…"
-        }
-    }
-
-    private var stoppingDetail: String? {
-        if model.isStopping {
-            if model.activeMessage?.stage == .savingMemory {
-                return "The save is already in progress. Waiting to confirm whether your thought was saved."
-            }
-            if model.activeMessage?.runID != nil || model.activeMessage?.stage == .submitting {
-                return "Waiting for Hermes to confirm the stop. Actions already taken are not undone."
-            }
-            return "Cancelling this request…"
-        }
-        if stopNeedsRetry { return "Hermes may still be working. Use Stop to try again." }
-        return nil
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 12) {
-                activityIndicator
-                    .frame(width: indicatorWidth, height: indicatorHeight)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Hermes")
-                        .font(.subheadline.weight(.semibold))
-                        .accessibilityAddTraits(.isHeader)
-                    Text(processingStatus)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("processingStatus")
-                    if let tool = model.activeTool {
-                        Text("Using \(tool)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let stoppingDetail {
-                        Text(stoppingDetail)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let approval = model.approval, !model.isStopping {
-                        Button("Review request") { reviewApproval(approval) }
-                            .font(.subheadline.weight(.semibold))
-                            .buttonStyle(.bordered)
-                            .frame(minHeight: 44)
-                            .accessibilityHint("Opens the pending command. Closing the review leaves your decision pending.")
-                            .accessibilityIdentifier("reviewApprovalButton")
-                    }
-                }
-            }
-            if !model.liveResponse.isEmpty {
-                HTMLResponseView(content: model.liveResponse, isStreaming: true)
-                    .accessibilityIdentifier("liveResponse")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.trailing, 8)
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private var activityIndicator: some View {
-        if stopNeedsRetry {
-            Image(systemName: "exclamationmark.circle")
-                .foregroundStyle(.secondary)
-        } else if model.approval != nil && !model.isStopping {
-            Image(systemName: "hand.raised")
-                .foregroundStyle(.secondary)
-        } else if reduceMotion {
-            Image(systemName: "ellipsis")
-                .foregroundStyle(.secondary)
-        } else {
-            ProgressView()
-                .controlSize(.small)
-                .tint(.secondary)
-        }
-    }
-}
 
 /// The framework's visible viewport already accounts for the composer, keyboard and other content insets.
 struct TranscriptGeometry {

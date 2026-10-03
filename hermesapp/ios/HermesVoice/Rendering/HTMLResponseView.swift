@@ -11,9 +11,15 @@ import SwiftUI
 /// A final reply taller than most of the screen starts collapsed with a control to show it in full, or in full when
 /// VoiceOver is running. A streaming reply (`isStreaming`) is a static preview, updated a few times a second, that
 /// shows its newest part within the same bounded height.
+/// New replies can opt into `animateTyping`: trusted DOM instrumentation reveals sanitized text at a human pace,
+/// including a fast final answer. The authoritative content remains untouched, and local page scripts stay disabled
+/// until `onTypingFinished` lets the caller turn animation off. Cached replies keep the immediate default.
 struct HTMLResponseView: View {
     private let content: String
     private let isStreaming: Bool
+    private let animateTyping: Bool
+    private let onTypingFinished: (@MainActor () -> Void)?
+    private let onContentVisible: (@MainActor () -> Void)?
     private let memoryKey: HTMLResponseMemory.Key?
 
     @State private var contentHeight: CGFloat?
@@ -30,10 +36,13 @@ struct HTMLResponseView: View {
     /// Beyond this, even an expanded reply scrolls inside its frame.
     private static let maximumInlineHeight: CGFloat = 40_000
 
-    init(content: String, isStreaming: Bool = false) {
+    init(content: String, isStreaming: Bool = false, animateTyping: Bool = false, onTypingFinished: (@MainActor () -> Void)? = nil, onContentVisible: (@MainActor () -> Void)? = nil) {
         self.content = content
         self.isStreaming = isStreaming
-        let key = isStreaming ? nil : HTMLResponseMemory.Key(content)
+        self.animateTyping = animateTyping
+        self.onTypingFinished = onTypingFinished
+        self.onContentVisible = onContentVisible
+        let key = isStreaming || animateTyping ? nil : HTMLResponseMemory.Key(content)
         memoryKey = key
         let remembered: HTMLResponseMemory.Entry? = if let key { HTMLResponseMemory.entry(for: key) } else { nil }
         _contentHeight = State(initialValue: remembered?.height)
@@ -50,11 +59,14 @@ struct HTMLResponseView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .onChange(of: isStreaming) { _, streaming in
+            if !streaming, fallbackText != nil { onTypingFinished?() }
+        }
     }
 
     private func rendered(_ layout: Layout) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            ResponseWebView(content: content, isStreaming: isStreaming, presentation: layout.presentation) { event in
+            ResponseWebView(content: content, isStreaming: isStreaming, animateTyping: animateTyping, presentation: layout.presentation) { event in
                 handle(event)
             }
             .frame(maxWidth: .infinity)
@@ -79,7 +91,7 @@ struct HTMLResponseView: View {
     private var layout: Layout {
         let collapsedHeight = max(320, ((availableHeight ?? 720) * 0.66).rounded())
         let height = contentHeight ?? min(collapsedHeight, Self.estimatedHeight(of: content))
-        if isStreaming {
+        if isStreaming || animateTyping {
             let visible = min(height, collapsedHeight)
             return Layout(presentation: ResponseWebPresentation(visibleHeight: visible), fadesTop: height > visible + 1)
         }
@@ -113,6 +125,12 @@ struct HTMLResponseView: View {
             expand(animated: false)
         case .renderingFailed(let plainText):
             fallbackText = plainText
+            if !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onContentVisible?() }
+            if !isStreaming { onTypingFinished?() }
+        case .typingFinished:
+            onTypingFinished?()
+        case .contentVisible:
+            onContentVisible?()
         }
     }
 

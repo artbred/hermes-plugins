@@ -25,12 +25,16 @@ enum ResponseWebEvent {
     case expansionNeeded
     /// The web content process ended; keep the response readable and let the user explicitly reload its formatting.
     case renderingFailed(plainText: String)
+    /// The latest authoritative final snapshot has been fully revealed.
+    case typingFinished
+    case contentVisible
 }
 
 /// A reply document in an isolated, non-persistent `WKWebView`. See ``ResponseWebCoordinator`` for its boundaries.
 struct ResponseWebView: UIViewRepresentable {
     let content: String
     let isStreaming: Bool
+    var animateTyping = false
     let presentation: ResponseWebPresentation
     let onEvent: @MainActor (ResponseWebEvent) -> Void
 
@@ -46,7 +50,7 @@ struct ResponseWebView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onEvent = onEvent
         coordinator.present(presentation)
-        coordinator.submit(content, isStreaming: isStreaming)
+        coordinator.submit(content, isStreaming: isStreaming, animateTyping: animateTyping)
     }
 
     static func dismantleUIView(_ container: ResponseWebContainerView, coordinator: ResponseWebCoordinator) {
@@ -131,10 +135,11 @@ final class ResponseWebCoordinator: NSObject {
     private var webView: WKWebView? { container?.webView }
 
     // Rendering: the latest content SwiftUI passed and the snapshot now shown.
-    private var submitted: (content: String, isStreaming: Bool)?
+    private var submitted: (content: String, isStreaming: Bool, animateTyping: Bool, revision: Int)?
+    private var revision = 0
     private var renderTask: Task<Void, Never>?
     private var lastRenderStart: ContinuousClock.Instant?
-    private var rendered: (source: String, isStreaming: Bool)?
+    private var rendered: (source: String, isStreaming: Bool, animateTyping: Bool, revision: Int)?
     private var payload: ResponseRenderPayload?
 
     // The loaded document.
@@ -144,7 +149,8 @@ final class ResponseWebCoordinator: NSObject {
     private var pendingDocumentLoads = 0
     private var allowsPageScripts = false
     private var isDocumentReady = false
-    private var pendingFragment: String?
+    private var pendingFragment: ResponseRenderPayload?
+    private var completedTypingRevision: Int?
 
     // Sizing.
     private var presentation = ResponseWebPresentation()
@@ -202,9 +208,10 @@ final class ResponseWebCoordinator: NSObject {
     }
 
     /// Called on every SwiftUI update; renders only when the reply or its streaming state changed.
-    func submit(_ content: String, isStreaming: Bool) {
-        if let submitted, submitted.isStreaming == isStreaming, submitted.content == content { return }
-        submitted = (content, isStreaming)
+    func submit(_ content: String, isStreaming: Bool, animateTyping: Bool = false) {
+        if let submitted, submitted.isStreaming == isStreaming, submitted.animateTyping == animateTyping, submitted.content == content { return }
+        revision += 1
+        submitted = (content, isStreaming, animateTyping, revision)
         guard renderTask == nil else { return }
         renderTask = Task { [weak self] in await self?.renderLatest() }
     }
@@ -212,6 +219,8 @@ final class ResponseWebCoordinator: NSObject {
     func tearDown() {
         renderTask?.cancel()
         renderTask = nil
+        generation += 1
+        submitted = nil
         guard let webView else { return }
         webView.stopLoading()
         webView.navigationDelegate = nil
@@ -234,25 +243,27 @@ final class ResponseWebCoordinator: NSObject {
                 }
             }
             let source = latest.isStreaming ? String(ResponseStreamingText.stablePrefix(of: latest.content)) : latest.content
-            if let rendered, rendered.isStreaming == latest.isStreaming, rendered.source == source {
+            if let rendered, rendered.isStreaming == latest.isStreaming, rendered.animateTyping == latest.animateTyping, rendered.source == source {
                 if isCurrent(latest) { return }
                 continue
             }
             lastRenderStart = ContinuousClock.now
             let isStreaming = latest.isStreaming
+            let animateTyping = latest.animateTyping
+            let revision = latest.revision
             let parsed = await Task.detached(priority: .userInitiated) {
-                ResponseRenderPayload(source: source, isStreaming: isStreaming)
+                ResponseRenderPayload(source: source, isStreaming: isStreaming, animateTyping: animateTyping, revision: revision)
             }.value
-            guard !Task.isCancelled else { return }
-            rendered = (source, isStreaming)
+            guard !Task.isCancelled, isCurrent(latest) else { continue }
+            rendered = (source, isStreaming, animateTyping, revision)
             show(parsed)
             if isCurrent(latest) { return }
         }
     }
 
-    private func isCurrent(_ snapshot: (content: String, isStreaming: Bool)) -> Bool {
+    private func isCurrent(_ snapshot: (content: String, isStreaming: Bool, animateTyping: Bool, revision: Int)) -> Bool {
         guard let submitted else { return true }
-        return submitted.isStreaming == snapshot.isStreaming && submitted.content == snapshot.content
+        return submitted.revision == snapshot.revision
     }
 
     /// Longer replies take longer to parse and lay out, so they update less often while streaming.
@@ -262,11 +273,11 @@ final class ResponseWebCoordinator: NSObject {
 
     private func show(_ payload: ResponseRenderPayload) {
         self.payload = payload
-        if payload.isStreaming, mode == .streaming {
+        if payload.isStreaming || payload.animateTyping, mode == .streaming {
             if isDocumentReady {
-                replaceFragment(payload.html)
+                replaceFragment(payload)
             } else {
-                pendingFragment = payload.html
+                pendingFragment = payload
             }
         } else {
             load(payload)
@@ -275,28 +286,28 @@ final class ResponseWebCoordinator: NSObject {
 
     private func load(_ payload: ResponseRenderPayload) {
         guard let webView else { return }
-        let mode: ResponseWebDocument.Mode = payload.isStreaming ? .streaming : .finished
+        let mode: ResponseWebDocument.Mode = payload.isStreaming || payload.animateTyping ? .streaming : .finished
         generation += 1
         self.mode = mode
         allowsPageScripts = mode == .finished
         isDocumentReady = false
-        pendingFragment = nil
+        pendingFragment = payload.animateTyping ? payload : nil
         messagesLeft = Self.messageBudget
         lastHeight = nil
         growth.removeAll()
         pendingDocumentLoads += 1
-        let document = ResponseWebDocument.html(fragment: payload.html, generation: generation, mode: mode)
+        let document = ResponseWebDocument.html(fragment: payload.html, generation: generation, mode: mode, animateTyping: payload.animateTyping)
         navigation = webView.loadHTMLString(document, baseURL: nil)
     }
 
-    private func replaceFragment(_ html: String) {
+    private func replaceFragment(_ payload: ResponseRenderPayload) {
         guard let webView else { return }
         messagesLeft = Self.messageBudget
         growth.removeAll()
         let expected = generation
         webView.callAsyncJavaScript(
-            "return globalThis.__hermesResponse ? globalThis.__hermesResponse.render(html) : false",
-            arguments: ["html": html],
+            "return globalThis.__hermesResponse ? globalThis.__hermesResponse.render(html, animateTyping, isFinal, revision) : false",
+            arguments: ["html": payload.html, "animateTyping": payload.animateTyping, "isFinal": !payload.isStreaming, "revision": payload.revision],
             in: nil,
             in: .defaultClient
         ) { [weak self] result in
@@ -343,6 +354,14 @@ final class ResponseWebCoordinator: NSObject {
             if let href = body["href"] as? String { openLink(href) }
         case "anchor":
             if let top = body["top"] as? Double { revealAnchor(at: top) }
+        case "typingFinished":
+            guard let revision = body["revision"] as? Int,
+                  let submitted, submitted.animateTyping, !submitted.isStreaming,
+                  submitted.revision == revision, completedTypingRevision != revision else { return }
+            completedTypingRevision = revision
+            onEvent?(.typingFinished)
+        case "contentVisible":
+            onEvent?(.contentVisible)
         default:
             break
         }
@@ -352,7 +371,7 @@ final class ResponseWebCoordinator: NSObject {
         guard !isSizingStopped, value.isFinite, value >= 0 else { return }
         let height = CGFloat(min(value, Double(Self.maximumContentHeight))).rounded(.up)
         guard height != lastHeight else { return }
-        if let lastHeight, height > lastHeight {
+        if let lastHeight, height > lastHeight, submitted?.animateTyping != true {
             // Content whose height follows its frame (viewport units, for one) grows on every resize. Stop following
             // it rather than resize forever.
             let now = ContinuousClock.now
@@ -553,11 +572,15 @@ struct ResponseRenderPayload: Sendable {
     let html: String
     let plainText: String
     let isStreaming: Bool
+    let animateTyping: Bool
+    let revision: Int
 
-    init(source: String, isStreaming: Bool) {
+    init(source: String, isStreaming: Bool, animateTyping: Bool = false, revision: Int = 0) {
         let content = ResponseContent(raw: source)
         html = content.html
         plainText = content.plainText
         self.isStreaming = isStreaming
+        self.animateTyping = animateTyping
+        self.revision = revision
     }
 }

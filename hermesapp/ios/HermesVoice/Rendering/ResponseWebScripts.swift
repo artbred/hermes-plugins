@@ -37,9 +37,17 @@ enum ResponseWebScripts {
 
       // The height of the content itself, not of the viewport: viewport-relative page styles cannot feed back into it.
       let lastHeight = -1;
+      let lastMeasurement = 0;
+      let measurementTimer = 0;
       const measure = () => {
         const body = document.body;
         if (!body) return;
+        if (typing && performance.now() - lastMeasurement < 100) {
+          if (!measurementTimer) measurementTimer = setTimeout(() => { measurementTimer = 0; measure(); }, 100);
+          return;
+        }
+        lastMeasurement = performance.now();
+        reportVisible();
         let bottom = 0;
         for (const child of body.children) {
           const rect = child.getBoundingClientRect();
@@ -142,6 +150,137 @@ enum ResponseWebScripts {
         measure();
         post({ type: "ready" });
       };
+
+      // Each sanitized fragment is parsed once, off-DOM. Only text nodes are masked; tags, CSS, scripts and control
+      // values are never typed. Inserting a fragment never executes its scripts. The native final reload enables
+      // those scripts only after the latest final snapshot has been revealed.
+      const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+      let typing = null;
+      let animationFrame = 0;
+      let reportedVisible = false;
+      const reportVisible = () => {
+        if (reportedVisible) return;
+        const root = document.getElementById("hermes-root");
+        if (!root) return;
+        const displayed = (element) => {
+          for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor);
+            if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0) return false;
+          }
+          return true;
+        };
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let visible = false;
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const parent = node.parentElement;
+          if (!/\S/u.test(node.data) || !parent || parent.closest("script, style, noscript, template, textarea, select, option") || !displayed(parent)) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const bounds = range.getBoundingClientRect();
+          if (bounds.width > 0 && bounds.height > 0) { visible = true; break; }
+        }
+        if (!visible) {
+          visible = Array.from(root.querySelectorAll("img, svg, canvas")).some((element) => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.width > 0 && bounds.height > 0 && displayed(element);
+          });
+        }
+        if (visible) {
+          reportedVisible = true;
+          post({ type: "contentVisible" });
+        }
+      };
+      const reveal = (state, count) => {
+        for (const entry of state.nodes) {
+          const visible = Math.min(entry.characters.length, Math.max(0, count - entry.offset));
+          if (visible !== entry.visible) {
+            entry.node.data = entry.characters.slice(0, visible).join("");
+            entry.visible = visible;
+          }
+        }
+        state.revealed = count;
+      };
+      const finishTyping = (state) => {
+        if (state.isFinal && !state.finished) {
+          state.finished = true;
+          post({ type: "typingFinished", revision: state.revision });
+        }
+      };
+      const tick = (time) => {
+        animationFrame = 0;
+        const state = typing;
+        if (!state || document.hidden) return;
+        // A suspended/backgrounded view does not jump straight to the end when it returns.
+        const elapsed = state.lastTime ? Math.min(0.1, (time - state.lastTime) / 1000) : 0;
+        state.lastTime = time;
+        state.credit += elapsed * Math.max(48, state.total / 9);
+        const advance = Math.floor(state.credit);
+        state.credit -= advance;
+        if (advance) {
+          reveal(state, Math.min(state.total, state.revealed + advance));
+          reportVisible();
+          measure();
+        }
+        if (state.revealed >= state.total) {
+          finishTyping(state);
+        } else {
+          animationFrame = requestAnimationFrame(tick);
+        }
+      };
+      const scheduleTyping = () => {
+        if (!animationFrame && typing && !document.hidden) animationFrame = requestAnimationFrame(tick);
+      };
+      document.addEventListener("visibilitychange", () => {
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+        if (typing) typing.lastTime = 0;
+        scheduleTyping();
+      });
+      window.addEventListener("pagehide", () => {
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        if (measurementTimer) clearTimeout(measurementTimer);
+        animationFrame = 0;
+        typing = null;
+      });
+      const render = (markup, animateTyping = false, isFinal = false, revision = 0) => {
+        const content = document.getElementById("hermes-root");
+        if (!content || typeof markup !== "string") return false;
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+        if (!animateTyping) {
+          typing = null;
+          content.innerHTML = markup;
+        } else {
+          const fragment = document.createElement("template");
+          fragment.innerHTML = markup;
+          const walker = document.createTreeWalker(fragment.content, NodeFilter.SHOW_TEXT);
+          const nodes = [];
+          let total = 0;
+          let fullText = "";
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const parent = node.parentElement;
+            if (!parent || parent.closest("script, style, noscript, template, textarea, select, option, input, [hidden], [aria-hidden='true']")) continue;
+            const characters = Array.from(segmenter.segment(node.data), (part) => part.segment);
+            fullText += node.data;
+            nodes.push({ node, characters, offset: total, visible: -1 });
+            total += characters.length;
+          }
+          // Preserve an append-only stream's exact prefix, not fuzzy matching or duplicated text. A changed
+          // authoritative snapshot starts again in this same row, still fully masked before it reaches the DOM.
+          const previous = typing;
+          const revealed = previous && fullText.startsWith(previous.fullText) ? Math.min(previous.revealed, total) : 0;
+          typing = { nodes, total, fullText, revealed: 0, credit: 0, lastTime: 0, isFinal, revision, finished: false };
+          reveal(typing, revealed);
+          content.replaceChildren(fragment.content);
+          scheduleTyping();
+        }
+        wrapTables(content);
+        measure();
+        return true;
+      };
+      Object.defineProperty(globalThis, "__hermesResponse", { value: Object.freeze({ render }) });
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", start, { once: true });
       } else {
@@ -149,18 +288,6 @@ enum ResponseWebScripts {
       }
       window.addEventListener("load", measure);
       window.addEventListener("resize", measure);
-
-      // Streamed updates replace the content without reloading the document. Scripts inserted this way never run,
-      // and streaming documents load with page JavaScript disabled.
-      const render = (markup) => {
-        const content = document.getElementById("hermes-root");
-        if (!content || typeof markup !== "string") return false;
-        content.innerHTML = markup;
-        wrapTables(content);
-        measure();
-        return true;
-      };
-      Object.defineProperty(globalThis, "__hermesResponse", { value: Object.freeze({ render }) });
     })();
     """#
 

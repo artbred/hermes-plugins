@@ -598,7 +598,6 @@ struct APIClientTests {
         #expect(events[0].id == "7")
         #expect(events[1].id == nil)
         #expect(events[2].id == "approval-42")
-        #expect(events[3].alreadyStreamed)
     }
 
     @Test("A truncated SSE frame is not published")
