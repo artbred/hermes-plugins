@@ -16,6 +16,9 @@ struct ResponseContent: Sendable {
     /// Human text for speech, copying, titles and context, read from the HTML without running scripts: no markup,
     /// scripts, styles or metadata.
     let plainText: String
+    /// Speech-only text: ``plainText`` minus secondary asides. Italics are the reply convention for side details —
+    /// shown muted gray, never spoken — so emphasis here is excluded while copy, titles and context keep the words.
+    let spokenText: String
     /// Whether the reply was HTML rather than Markdown or plain text.
     let isHTML: Bool
 
@@ -23,7 +26,7 @@ struct ResponseContent: Sendable {
         let source = raw.trimmingCharacters(in: Self.edgeWhitespace)
         let fragment: SanitizedFragment
         if source.isEmpty {
-            fragment = SanitizedFragment(html: "", plainText: "")
+            fragment = SanitizedFragment(html: "", plainText: "", spokenText: "")
             isHTML = false
         } else if ReplyMarkup.opensWithHTML(source) {
             fragment = SanitizedFragment(authoredHTML: source)
@@ -37,6 +40,7 @@ struct ResponseContent: Sendable {
         }
         html = fragment.html
         plainText = fragment.plainText
+        spokenText = fragment.spokenText
     }
 
     /// Whitespace plus the byte-order mark some tools prepend.
@@ -94,10 +98,12 @@ private enum ReplyMarkup {
 private struct SanitizedFragment {
     let html: String
     let plainText: String
+    let spokenText: String
 
-    init(html: String, plainText: String) {
+    init(html: String, plainText: String, spokenText: String) {
         self.html = html
         self.plainText = plainText
+        self.spokenText = spokenText
     }
 
     /// HTML the model wrote. A trailing `<` or `</` is a tag still streaming in, which the parser would otherwise show
@@ -120,21 +126,23 @@ private struct SanitizedFragment {
             self = rendered
         } else {
             // SwiftSoup throws only on API misuse. Keep the reply readable as inert text rather than lose it.
-            self = SanitizedFragment(html: "<p style=\"white-space: pre-wrap\">\(ReplyHTMLEscaping.text(fallback))</p>", plainText: fallback)
+            self = SanitizedFragment(html: "<p style=\"white-space: pre-wrap\">\(ReplyHTMLEscaping.text(fallback))</p>", plainText: fallback, spokenText: fallback)
         }
     }
 
     private static func render(_ markup: String, policy: ReplyHTMLSanitizer.Policy) throws -> SanitizedFragment {
         let document = try SwiftSoup.parse(markup)
         document.outputSettings().prettyPrint(pretty: false)
-        guard let body = try content(of: document) else { return SanitizedFragment(html: "", plainText: "") }
+        guard let body = try content(of: document) else { return SanitizedFragment(html: "", plainText: "", spokenText: "") }
         try normalizeNesting(in: body)
         try ReplyHTMLSanitizer(policy: policy).sanitizeChildren(of: body, inForeignContent: false)
         var text = PlainTextWriter()
         text.writeChildren(of: body)
+        var speech = PlainTextWriter(excludingEmphasis: true)
+        speech.writeChildren(of: body)
         // SwiftSoup 2.9.6 serializes the DOM, without reusing pre-sanitized source ranges.
         let bytes = try body.htmlUTF8()
-        return SanitizedFragment(html: String(decoding: bytes, as: UTF8.self), plainText: text.finished)
+        return SanitizedFragment(html: String(decoding: bytes, as: UTF8.self), plainText: text.finished, spokenText: speech.finished)
     }
 
     /// Bound native recursive walks without dropping deeply wrapped answer text. Raw-text nodes are converted or
@@ -416,6 +424,8 @@ private enum ReplyURLPolicy {
 /// become line breaks, list items get markers, table cells are tab separated and preformatted text keeps its spacing.
 private struct PlainTextWriter {
     private var text = ""
+    /// When true, `em`/`i` asides are skipped: italics are the reply convention for side details.
+    private let excludingEmphasis: Bool = false
     private var pendingBreaks = 0
     private var pendingSpace = false
     private var mayInsertSpace = false
@@ -477,6 +487,10 @@ private struct PlainTextWriter {
         case "blockquote":
             // Secondary depth: shown gray on screen, never spoken, copied or titled.
             return
+        case "em", "i":
+            // Italic asides: shown muted gray; spoken only in the full-text pass.
+            if excludingEmphasis { return }
+            writeChildren(of: element)
         case "img":
             writeCollapsible(attribute("alt", of: element))
         case "hr":
