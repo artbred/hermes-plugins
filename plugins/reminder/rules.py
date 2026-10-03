@@ -334,9 +334,10 @@ home tmp skills logs state main test tests docs old new bak
 
 def _tokens(text: str) -> set:
     """Path/name tokens plus their -_. sub-parts (so `grep critic` names
-    `agent-plugin-response-critic`)."""
+    `agent-plugin-response-critic`). Unresolved $VARS name nothing."""
     found = set()
-    for raw in re.split(r"[\s'\"=,;:(){}\[\]|&<>*~]+", text or ""):
+    text = _VAR.sub(" ", text or "")
+    for raw in re.split(r"[\s'\"=,;:(){}\[\]|&<>*~]+", text):
         for part in raw.split("/"):
             for tok in _TOKEN.findall(part):
                 tok = tok.lower().strip(".-_")
