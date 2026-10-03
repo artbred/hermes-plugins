@@ -1,5 +1,5 @@
 name: reminder
-version: 0.1.0
+version: 0.2.0
 description: "Gatekeeper ledger: derives checklists from request verbs, records tool evidence, and injects open checks back into the run."
 author: Artem + Hermes
 license: MIT

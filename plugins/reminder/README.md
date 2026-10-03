@@ -19,9 +19,9 @@ touches. No network, no Jev calls, no added latency. All middleware bodies
 are exception-swallowed — the plugin can never break a run.
 
 The long-lived system map (components, data flow, past failures) lives in
-Graphiti group `infra` on Neo4j; this ledger is the working set. A scheduled
-flusher from ledger rows to Graphiti triplets is the planned next step
-(v0.2.0) — currently the map is extended during sessions.
+Graphiti group `infra` on Neo4j; this ledger is the working set. `flush.py`
+syncs selectively (new tasks, verified resolutions, tool failures — never
+routine touches, max 8 triplets per run) via system cron every 30 minutes.
 
 ## Install
 
