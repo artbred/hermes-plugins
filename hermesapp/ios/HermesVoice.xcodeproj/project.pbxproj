@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		05E959D362B31EF6635D16FD /* HermesModelInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 123750B6008545EFE7B9101E /* HermesModelInventory.swift */; };
 		0751D675E90EC9AB529BD3DA /* ReplyNotificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1044E809AF8960C0C6193E8 /* ReplyNotificationTests.swift */; };
 		0AF924BAC7B8FCE995C44ABB /* TranscriptFollowingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63220F7D444A5492AF8536AF /* TranscriptFollowingTests.swift */; };
 		15EE490399EE18B792F7B7D5 /* StartVoiceChatIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DDBE1B12FAA1236467B7B2 /* StartVoiceChatIntent.swift */; };
@@ -74,6 +75,7 @@
 		0394F5EA34F804478EF619C3 /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
 		0BBD4F85A9DA89D67CF036DE /* ResponseWebPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseWebPolicyTests.swift; sourceTree = "<group>"; };
 		105FEB44C4FC775234BC3A17 /* ChatModelSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModelSelectionTests.swift; sourceTree = "<group>"; };
+		123750B6008545EFE7B9101E /* HermesModelInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesModelInventory.swift; sourceTree = "<group>"; };
 		1544A200E4556E426C23F0F3 /* ChatAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachment.swift; sourceTree = "<group>"; };
 		196F600DBC70067CA6F74223 /* HTMLResponseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLResponseView.swift; sourceTree = "<group>"; };
 		1D9F3BFC944D273C522915C5 /* StubServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubServer.swift; sourceTree = "<group>"; };
@@ -267,6 +269,7 @@
 				0394F5EA34F804478EF619C3 /* Chat.swift */,
 				1544A200E4556E426C23F0F3 /* ChatAttachment.swift */,
 				85FAEEBEFC3989F35B3EE463 /* HermesModelChoice.swift */,
+				123750B6008545EFE7B9101E /* HermesModelInventory.swift */,
 				809B89F99662C3629871B464 /* SpeechVoice.swift */,
 			);
 			path = Model;
@@ -396,6 +399,7 @@
 				9639AD5D29DC5586FA9CFF13 /* ComposerView.swift in Sources */,
 				F45D459BF573BF2D6BBF4766 /* HTMLResponseView.swift in Sources */,
 				FB4D0F50E8F1281FB260AF6B /* HermesModelChoice.swift in Sources */,
+				05E959D362B31EF6635D16FD /* HermesModelInventory.swift in Sources */,
 				6AD5D3983E5989A77FB320DD /* HermesVoiceApp.swift in Sources */,
 				61A6DD4B49547814F91F9860 /* HermesVoiceShortcuts.swift in Sources */,
 				37AF00E7F042C93F8ECCC1A4 /* Keychain.swift in Sources */,
@@ -544,7 +548,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 34;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -617,7 +621,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 34;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 8RK5YR2SLU;
 				ENABLE_NS_ASSERTIONS = NO;

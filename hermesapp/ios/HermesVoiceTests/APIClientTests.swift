@@ -13,36 +13,142 @@ struct APIClientTests {
         }}
         """
 
-    @Test("Native inventory ranks featured eligible models without conflating provider names")
+    @Test("Suggestions use the configured default and distinct interactive usage, not catalogue order")
     func concreteModelInventory() async throws {
-        let server = StubServer { _ in .json(200, """
-            {"model":"server-only-default","provider":"unconfigured","providers":[
-              {"slug":"first","name":"Same name","authenticated":true,"source":"built-in",
-               "models":["alpha-base","alpha-feature","shared-model","alpha-feature","paid-model","hermes-agent","default",""," padded ","bad\\nmodel"],
-               "featured_models":["not-in-inventory","paid-model","alpha-feature","alpha-feature"],
-               "unavailable_models":["paid-model"]},
-              {"slug":"second","name":"Same name","authenticated":true,"source":"user-config",
-               "aliases":["custom:second","legacy-second"],"models":["shared-model","second-base"],
-               "featured_models":["shared-model"]},
-              {"slug":"first","authenticated":true,"models":["shared-model","third-feature"],"featured_models":["third-feature"]},
-              {"slug":"missing-auth","models":["not-authenticated"]},
-              {"slug":"unconfigured","authenticated":false,"source":"configured-current","models":["server-only-default"],"featured_models":["server-only-default"]},
-              {"slug":"moa","authenticated":true,"source":"virtual","auth_type":"virtual","models":["preset"]},
-              {"slug":"unreachable","authenticated":true,"native_catalog_empty":true,"models":["stale-model"]},
-              {"slug":"pending","authenticated":true,"free_tier_pending":true,"models":["locked-model"]},
-              {"slug":" bad-provider ","authenticated":true,"models":["otherwise-valid"]},
-              {"slug":"custom:local","authenticated":true,"models":["My Custom Model","MiniMax-M3:cloud"]},
-              {"slug":"empty","authenticated":true,"models":[]}
-            ]}
-            """) }
-        let choices = try await server.client(path: "/p/work").modelChoices()
-        #expect(choices.map(\.provider) == ["first", "second", "first", "first", "first", "second", "custom:local", "custom:local"])
-        #expect(choices.map(\.modelID) == [
-            "alpha-feature", "shared-model", "third-feature", "alpha-base", "shared-model",
-            "second-base", "My Custom Model", "MiniMax-M3:cloud"
+        let catalogue = (0..<300).map { "unused-\($0)" }
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "model": "Exact-Default", "provider": "Muse-Code",
+            "providers": [
+                ["slug": "other", "authenticated": true,
+                 "models": catalogue + ["popular", "recent", "stable-a", "stable-b", "overflow", "ambiguous", "paid"],
+                 "featured_models": catalogue, "unavailable_models": ["paid"]],
+                ["slug": "Muse-Code", "authenticated": true, "models": ["Exact-Default", "ambiguous"]],
+                ["slug": "locked", "authenticated": false, "models": ["locked-model"]],
+                ["slug": "pending", "authenticated": true, "free_tier_pending": true, "models": ["pending-model"]],
+                ["slug": "empty-native", "authenticated": true, "native_catalog_empty": true, "models": ["stale"]],
+                ["slug": "moa", "authenticated": true, "source": "virtual", "models": ["virtual-model"]]
+            ]
         ])
-        #expect(Set(choices.map(\.id)).count == choices.count)
-        #expect(choices[1].id != choices[4].id)
+        let server = StubServer { request in
+            if request.path.hasSuffix("/api/model/options") {
+                return .json(200, String(decoding: payload, as: UTF8.self))
+            }
+            let query = URLComponents(url: request.request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            guard query.contains(URLQueryItem(name: "limit", value: "200")),
+                  query.contains(URLQueryItem(name: "include_children", value: "false")),
+                  request.request.value(forHTTPHeaderField: "Authorization") != nil else {
+                return .json(400, #"{"detail":"Unbounded or unauthenticated metadata"}"#)
+            }
+            if query.contains(URLQueryItem(name: "source", value: "cli")) {
+                return .json(200, """
+                    {"data":[
+                      {"id":"popular-1","model":"popular","source":"cli","last_active":1},
+                      {"id":"popular-2","model":"popular","source":"cli","last_active":2},
+                      {"id":"compressed-1","_lineage_root_id":"root","model":"recent","last_active":9},
+                      {"id":"compressed-2","_lineage_root_id":"root","model":"recent","last_active":10},
+                      {"id":"a","model":"stable-a","started_at":5},
+                      {"id":"b","model":"stable-b","started_at":5},
+                      {"id":"overflow","model":"overflow","started_at":4},
+                      {"id":"ambiguous","model":"ambiguous","last_active":100},
+                      {"id":"cron","model":"overflow","source":"cron","last_active":100},
+                      {"id":"hidden","model":"overflow","hidden":true,"last_active":100},
+                      {"id":"archived","model":"overflow","archived":true,"last_active":100},
+                      {"id":"paid","model":"paid"},{"id":"locked","model":"locked-model"},
+                      {"id":"pending","model":"pending-model"},{"id":"stale","model":"stale"},
+                      {"id":"virtual","model":"virtual-model"},{"id":"unknown","model":"unknown"}
+                    ]}
+                    """)
+            }
+            // Duplicate cross-source rows must not inflate recent's usage above popular.
+            return .json(200, #"{"data":[{"id":"compressed-2","_lineage_root_id":"root","model":"recent","last_active":10}]}"#)
+        }
+        let inventory = try await server.client(path: "/p/work").modelInventory()
+        #expect(inventory.defaultModel?.provider == "Muse-Code")
+        #expect(inventory.defaultModel?.modelID == "Exact-Default")
+        #expect(inventory.suggestedModels.map(\.modelID) == ["Exact-Default", "popular", "recent", "stable-a", "stable-b"])
+        #expect(inventory.availableModels.count == 308)
+        #expect(inventory.availableModels.filter { $0.modelID == "ambiguous" }.count == 2)
+        #expect(inventory.availableModels.contains { $0.modelID == "overflow" })
+        #expect(!inventory.availableModels.contains { $0.modelID == "paid" })
+    }
+
+    @Test("No observed usage leaves only the exact configured default, never catalogue fillers")
+    func defaultWithoutUsage() async throws {
+        let server = StubServer { request in
+            .json(200, request.path.hasSuffix("/api/model/options")
+                  ? #"{"model":"Shared-ID","provider":"Exact-Provider","providers":[{"slug":"other","authenticated":true,"models":["Shared-ID","unused"]},{"slug":"Exact-Provider","authenticated":true,"models":["Shared-ID","default","hermes-agent"," padded "]}]}"#
+                  : #"{"data":[]}"#)
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.suggestedModels == [try #require(inventory.defaultModel)])
+        #expect(inventory.defaultModel?.provider == "Exact-Provider")
+        #expect(inventory.availableModels.count == 3)
+    }
+
+    @Test("Server-supplied provider aliases resolve only unique eligible concrete identities", arguments: [
+        ("legacy", "concrete"),
+        ("concrete", "concrete"),
+        ("Concrete", nil),
+        ("ambiguous-alias", nil)
+    ])
+    func configuredProviderAlias(provider: String, expected: String?) async throws {
+        let server = StubServer { request in
+            if request.path.hasSuffix("/api/model/options") {
+                return .json(200, """
+                    {"model":"Shared-ID","provider":"\(provider)","providers":[
+                      {"slug":"concrete","aliases":["legacy","ambiguous-alias"],"authenticated":true,"models":["Shared-ID"]},
+                      {"slug":"other","aliases":["ambiguous-alias"],"authenticated":true,"models":["Shared-ID"]}
+                    ]}
+                    """)
+            }
+            return .json(200, #"{"data":[{"id":"used","model":"Shared-ID","source":"telegram","last_active":1}]}"#)
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.defaultModel?.provider == expected)
+        #expect(inventory.suggestedModels.count == (expected == nil ? 0 : 1))
+        #expect(inventory.suggestedModels.first?.provider == expected)
+    }
+
+    @Test("Without an eligible configured default, only actual uniquely routed usage is suggested")
+    func usageWithoutDefault() async throws {
+        let server = StubServer { request in
+            if request.path.hasSuffix("/api/model/options") {
+                return .json(200, """
+                    {"model":"ineligible","provider":"locked","providers":[
+                      {"slug":"locked","authenticated":false,"models":["ineligible"]},
+                      {"slug":"Route","authenticated":true,"models":["A","a","B","C","D","E","unused"]}
+                    ]}
+                    """)
+            }
+            let query = URLComponents(url: request.request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let source = query.first { $0.name == "source" }?.value ?? ""
+            switch source {
+            case "api_server": return .json(200, #"{"data":[{"id":"1","model":"A","last_active":10}]}"#)
+            case "desktop": return .json(200, #"{"data":[{"id":"2","model":"a","last_active":10}]}"#)
+            case "cli": return .json(200, #"{"data":[{"id":"3","model":"B","last_active":9}]}"#)
+            case "telegram": return .json(200, #"{"data":[{"id":"4","model":"C","last_active":8}]}"#)
+            case "oneshot": return .json(200, #"{"data":[{"id":"5","model":"D","last_active":7},{"id":"6","model":"E","last_active":6}]}"#)
+            default: return .json(400, #"{"detail":"Unexpected source"}"#)
+            }
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.defaultModel == nil)
+        #expect(inventory.suggestedModels.map(\.modelID) == ["A", "a", "B", "C", "D"])
+        #expect(inventory.suggestedModels.allSatisfy { $0.provider == "Route" })
+        #expect(inventory.availableModels.map(\.modelID) == ["A", "a", "B", "C", "D", "E", "unused"])
+    }
+
+    @Test("An unavailable exact provider never reroutes its configured model via another provider alias")
+    func unavailableExactProvider() async throws {
+        let server = StubServer { request in
+            .json(200, request.path.hasSuffix("/api/model/options")
+                  ? #"{"model":"Shared","provider":"locked","providers":[{"slug":"locked","authenticated":false,"models":["Shared"]},{"slug":"other","aliases":["locked"],"authenticated":true,"models":["Shared"]}]}"#
+                  : #"{"data":[]}"#)
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.defaultModel == nil)
+        #expect(inventory.suggestedModels.isEmpty)
+        #expect(inventory.availableModels.first?.provider == "other")
     }
 
     @Test("Empty and ineligible inventories never synthesize the top-level default", arguments: [
@@ -52,9 +158,13 @@ struct APIClientTests {
         #"{"model":"global-default","provider":"global-provider","providers":[{"slug":"global-provider","authenticated":true,"models":["hermes-agent","hermes","default","auto","openrouter/auto"]}]}"#
     ])
     func noInventoryDefaultFallback(payload: String) async throws {
-        let server = StubServer { _ in .json(200, payload) }
-        #expect(try await server.client().modelChoices().isEmpty)
-        #expect(server.requests.map(\.path) == ["/api/model/options"])
+        let server = StubServer { request in
+            .json(200, request.path.hasSuffix("/api/model/options") ? payload : #"{"data":[]}"#)
+        }
+        let inventory = try await server.client().modelInventory()
+        #expect(inventory.defaultModel == nil)
+        #expect(inventory.availableModels.isEmpty)
+        #expect(inventory.suggestedModels.isEmpty)
     }
 
     @Test("Malformed native inventory fails rather than consulting virtual model aliases", arguments: [
@@ -65,7 +175,7 @@ struct APIClientTests {
     ])
     func malformedModelInventory(payload: String) async {
         let server = StubServer { _ in .json(200, payload) }
-        let error = await #expect(throws: APIError.self) { try await server.client().modelChoices() }
+        let error = await #expect(throws: APIError.self) { try await server.client().modelInventory() }
         guard case .invalidResponse? = error else { Issue.record("Expected invalidResponse"); return }
         #expect(server.requests.map(\.path) == ["/api/model/options"])
     }
@@ -77,9 +187,41 @@ struct APIClientTests {
     ])
     func unavailableModelInventory(status: Int, expected: APIError) async {
         let server = StubServer { _ in .json(status, #"{"detail":"Inventory unavailable"}"#) }
-        let error = await #expect(throws: APIError.self) { try await server.client().modelChoices() }
+        let error = await #expect(throws: APIError.self) { try await server.client().modelInventory() }
         #expect(error == expected)
         #expect(server.requests.map(\.path) == ["/api/model/options"])
+    }
+
+    @Test("Session metadata errors fail the inventory instead of presenting arbitrary suggestions")
+    func unavailableUsageMetadata() async {
+        let server = StubServer { request in
+            .json(request.path.hasSuffix("/api/model/options") ? 200 : 503,
+                  request.path.hasSuffix("/api/model/options")
+                  ? #"{"model":"valid","provider":"provider","providers":[{"slug":"provider","authenticated":true,"models":["valid","unused"]}]}"#
+                  : #"{"detail":"Usage unavailable"}"#)
+        }
+        let error = await #expect(throws: APIError.self) { try await server.client().modelInventory() }
+        #expect(error == .server(status: 503, message: "Usage unavailable"))
+    }
+
+    @Test("Cancelling inventory closes the metadata request and does not produce partial suggestions")
+    @MainActor
+    func cancelInventory() async {
+        let server = StubServer { request in
+            if request.path.hasSuffix("/api/model/options") {
+                return .json(200, #"{"model":"valid","provider":"provider","providers":[{"slug":"provider","authenticated":true,"models":["valid"]}]}"#)
+            }
+            return .stream(chunks: [], finish: false)
+        }
+        let consumer = Task { try await server.client().modelInventory() }
+        #expect(await eventually { server.requests.contains { $0.path.hasSuffix("/api/sessions") } })
+        consumer.cancel()
+        let result = await consumer.result
+        switch result {
+        case .success: Issue.record("Cancelled inventory returned suggestions")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+        #expect(await eventually { server.cancellations > 0 })
     }
 
     @Test("Run admission rejects non-concrete model identities before transport", arguments: [

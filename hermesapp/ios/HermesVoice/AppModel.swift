@@ -45,8 +45,10 @@ final class AppModel {
     var modelSelectionError: String?
     var composerFocusRequest = UUID()
     private var availableModels: [HermesModelChoice] = []
+    private var suggestedModels: [HermesModelChoice] = []
     @ObservationIgnored private var availableModelsByID: [String: HermesModelChoice] = [:]
-    private var preferredChatModel: HermesModelChoice?
+    private(set) var configuredDefaultModel: HermesModelChoice?
+    @ObservationIgnored private var manuallySelectedChatIDs: Set<String> = []
     @ObservationIgnored private var modelInventoryRevision = UUID()
     @ObservationIgnored private var observedModelServerURL: String
     @ObservationIgnored private var observedModelToken: String
@@ -106,7 +108,8 @@ final class AppModel {
         availableModelsByID = Dictionary(initialModelChoices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         observedModelServerURL = settings.serverURL
         observedModelToken = settings.token
-        preferredChatModel = initialModelChoice ?? settings.preferredChatModel
+        configuredDefaultModel = initialModelChoice.map { choice in initialModelChoices.first { $0.id == choice.id } ?? choice }
+        suggestedModels = initialModelChoices
         self.store = store
         self.recorder = recorder
         selectedChatID = store.chats.first?.id
@@ -123,11 +126,12 @@ final class AppModel {
             }
         }
         monitor.start(queue: DispatchQueue(label: "com.artbred.hermesapp.network"))
+        adoptConfiguredDefaultForEmptyChat()
     }
 
     var selectedChat: Chat? { selectedChatID.flatMap(store.chat(id:)) }
     var selectedChatModel: HermesModelChoice? {
-        guard let selected = selectedChat?.modelChoice ?? preferredChatModel else { return nil }
+        guard let selected = selectedChat?.modelChoice ?? configuredDefaultModel else { return nil }
         return availableModelsByID[selected.id] ?? selected
     }
     var modelChoices: [HermesModelChoice] {
@@ -141,15 +145,10 @@ final class AppModel {
                   let available = availableModelsByID[candidate.id], seen.insert(candidate.id).inserted else { return }
             choices.append(available)
         }
-        append(selectedChatModel)
-        // ChatStore already keeps chats in descending activity order.
-        for chat in store.chats {
+        append(configuredDefaultModel)
+        for suggested in suggestedModels {
             if choices.count == 5 { break }
-            append(chat.modelChoice)
-        }
-        for available in availableModels {
-            if choices.count == 5 { break }
-            append(available)
+            append(suggested)
         }
         return choices
     }
@@ -163,11 +162,14 @@ final class AppModel {
         isLoadingModels = true
         defer { if revision == modelInventoryRevision { isLoadingModels = false } }
         do {
-            let choices = try await client.modelChoices()
+            let inventory = try await client.modelInventory()
             guard !Task.isCancelled, revision == modelInventoryRevision else { return }
-            availableModels = choices
-            availableModelsByID = Dictionary(choices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            if choices.isEmpty {
+            availableModels = inventory.availableModels
+            availableModelsByID = Dictionary(inventory.availableModels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            configuredDefaultModel = inventory.defaultModel
+            suggestedModels = inventory.suggestedModels
+            adoptConfiguredDefaultForEmptyChat()
+            if availableModels.isEmpty {
                 modelSelectionError = "Hermes has no available chat models. Configure a provider before sending."
             } else if let selected = selectedChatModel, availableModelsByID[selected.id] == nil {
                 modelSelectionError = "This model is no longer available. Choose another model."
@@ -180,21 +182,22 @@ final class AppModel {
         }
     }
 
+    private func adoptConfiguredDefaultForEmptyChat() {
+        guard canChangeModel, let configuredDefaultModel, var chat = selectedChat, chat.messages.isEmpty,
+              !manuallySelectedChatIDs.contains(chat.id), chat.modelChoice != configuredDefaultModel else { return }
+        chat.modelChoice = configuredDefaultModel
+        do { try store.save(chat) }
+        catch { show(error, title: "Could not save default model") }
+    }
+
     func selectChatModel(_ choice: HermesModelChoice) {
         guard canChangeModel, let choice = availableModelsByID[choice.id] else { return }
-        let previousPreference = settings.preferredChatModel
+        if selectedChat == nil { newChat(focusComposer: false) }
+        guard var chat = selectedChat else { return }
+        chat.modelChoice = choice
         do {
-            try settings.savePreferredChatModel(choice)
-            do {
-                if var chat = selectedChat {
-                    chat.modelChoice = choice
-                    try store.save(chat)
-                }
-            } catch {
-                try settings.savePreferredChatModel(previousPreference)
-                throw error
-            }
-            preferredChatModel = choice
+            try store.save(chat)
+            manuallySelectedChatIDs.insert(chat.id)
             modelSelectionError = nil
         } catch { show(error, title: "Could not save model selection") }
     }
@@ -265,7 +268,7 @@ final class AppModel {
         if isRecordingInProgress { discardRecording() }
         if let selectedChatID { drafts[selectedChatID] = draft }
         var chat = Chat()
-        chat.modelChoice = preferredChatModel
+        chat.modelChoice = configuredDefaultModel
         do {
             try store.save(chat)
             selectedChatID = chat.id
@@ -281,6 +284,7 @@ final class AppModel {
         if isRecordingInProgress { discardRecording() }
         if let selectedChatID { drafts[selectedChatID] = draft }
         selectedChatID = id
+        adoptConfiguredDefaultForEmptyChat()
         draft = drafts[id] ?? ""
         isChatsPresented = false
         stopPlayback()
@@ -397,7 +401,7 @@ final class AppModel {
     private func enqueue(_ recording: Recording) {
         guard let chatID = recordingChatID, var chat = store.chat(id: chatID) else { return }
         var message = ChatMessage(id: recording.id, role: .user, input: .voice, text: "", createdAt: recording.startedAt, audioFileName: recording.url.lastPathComponent, attachments: chat.draftAttachments, recordingDuration: recording.duration)
-        message.modelChoice = chat.modelChoice ?? preferredChatModel
+        message.modelChoice = chat.modelChoice ?? configuredDefaultModel
         chat.messages.append(message)
         chat.draftAttachments = nil
         chat.updatedAt = .now
@@ -421,10 +425,10 @@ final class AppModel {
                     $0.runID = nil
                     $0.runWasTerminal = false
                     $0.submission = nil
-                    $0.modelChoice = chat.modelChoice ?? preferredChatModel
+                    $0.modelChoice = chat.modelChoice ?? configuredDefaultModel
                 }
                 if $0.submission == nil, $0.runID == nil, $0.modelChoice == nil {
-                    $0.modelChoice = chat.modelChoice ?? preferredChatModel
+                    $0.modelChoice = chat.modelChoice ?? configuredDefaultModel
                 }
                 $0.error = nil
                 $0.stopRequested = nil
@@ -554,6 +558,8 @@ final class AppModel {
             modelInventoryRevision = UUID()
             availableModels = []
             availableModelsByID = [:]
+            configuredDefaultModel = nil
+            suggestedModels = []
             isLoadingModels = false
             modelSelectionError = nil
             Task { await refreshModelChoices() }
@@ -673,7 +679,7 @@ final class AppModel {
             if message.submission == nil {
                 if availableModels.isEmpty { await refreshModelChoices() }
                 try checkWorker(chatID, workerID)
-                guard let choice = message.modelChoice ?? store.chat(id: chatID)?.modelChoice ?? preferredChatModel,
+                guard let choice = message.modelChoice ?? store.chat(id: chatID)?.modelChoice ?? configuredDefaultModel,
                       availableModelsByID[choice.id] != nil else { throw ChatError.modelNotSelected }
                 message.modelChoice = choice
                 for index in message.files.indices where message.files[index].remotePath == nil {

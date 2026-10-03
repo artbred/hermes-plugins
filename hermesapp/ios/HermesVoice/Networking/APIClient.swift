@@ -298,7 +298,7 @@ struct APIClient: Sendable {
         return "Connected to Hermes\(capabilities.model.map { " · \($0)" } ?? ""). Chat, speech, files, classification, titles and memory reachable."
     }
 
-    func modelChoices() async throws -> [HermesModelChoice] {
+    func modelInventory() async throws -> HermesModelInventory {
         struct Inventory: Decodable {
             struct Provider: Decodable {
                 var slug: String
@@ -306,14 +306,40 @@ struct APIClient: Sendable {
                 var authenticated: Bool?
                 var source: String?
                 var auth_type: String?
-                var featured_models: [String]?
+                var aliases: [String]?
                 var unavailable_models: [String]?
                 var native_catalog_empty: Bool?
                 var free_tier_pending: Bool?
             }
+            var model: String?
+            var provider: String?
             var providers: [Provider]
         }
-        // The top-level model/provider describe server-global configuration, not a client choice.
+        struct UsageSession: Decodable {
+            var id: String
+            var model: String?
+            var source: String?
+            var lineageRootID: String?
+            var lastActive: NativeDate?
+            var startedAt: NativeDate?
+            var hidden: Bool?
+            var archived: Bool?
+            var recency: Date { lastActive?.value ?? startedAt?.value ?? .distantPast }
+
+            enum CodingKeys: String, CodingKey {
+                case id, model, source, hidden, archived
+                case lineageRootID = "_lineage_root_id"
+                case lastActive = "last_active", startedAt = "started_at"
+            }
+        }
+        struct Page: Decodable { var data: [UsageSession] }
+        struct Usage {
+            var choice: HermesModelChoice
+            var count: Int
+            var recency: Date
+        }
+
+        try Task.checkCancellation()
         let inventory: Inventory = try await get(["api", "model", "options"])
         let providers = inventory.providers.compactMap { row -> (Inventory.Provider, Set<String>)? in
             guard row.authenticated == true, row.source != "virtual", row.auth_type != "virtual",
@@ -325,24 +351,91 @@ struct APIClient: Sendable {
             })
             return (row, available)
         }
-        var choices: [HermesModelChoice] = []
+        var availableModels: [HermesModelChoice] = []
         var seen = Set<String>()
-        // Featured entries retain server ranking, then the remaining provider inventories retain order.
-        for featuredOnly in [true, false] {
-            for (row, available) in providers {
-                for modelID in featuredOnly ? row.featured_models ?? [] : row.models {
-                    guard available.contains(modelID) else { continue }
-                    var choice = HermesModelChoice(provider: row.slug, modelID: modelID, displayName: "")
-                    guard seen.insert(choice.id).inserted else { continue }
-                    let name = modelID.split(separator: "/").last.map(String.init) ?? modelID
-                    choice.displayName = name.replacingOccurrences(of: "-", with: " ")
-                        .replacingOccurrences(of: "_", with: " ").capitalized
-                        .replacingOccurrences(of: "Gpt", with: "GPT")
-                    choices.append(choice)
+        for (row, available) in providers {
+            for modelID in row.models where available.contains(modelID) {
+                var choice = HermesModelChoice(provider: row.slug, modelID: modelID, displayName: "")
+                guard seen.insert(choice.id).inserted else { continue }
+                let name = modelID.split(separator: "/").last.map(String.init) ?? modelID
+                choice.displayName = name.replacingOccurrences(of: "-", with: " ")
+                    .replacingOccurrences(of: "_", with: " ").capitalized
+                    .replacingOccurrences(of: "Gpt", with: "GPT")
+                availableModels.append(choice)
+            }
+        }
+
+        // Exact provider identity takes precedence. Only server-supplied aliases can
+        // resolve configuration to a concrete slug, and only when unambiguous.
+        var defaultModel: HermesModelChoice?
+        if let model = inventory.model, let provider = inventory.provider {
+            defaultModel = availableModels.first { $0.provider == provider && $0.modelID == model }
+            if defaultModel == nil && !inventory.providers.contains(where: { $0.slug == provider }) {
+                let slugs = Set(providers.compactMap { row, available in
+                    available.contains(model) && (row.aliases ?? []).contains(provider) ? row.slug : nil
+                })
+                if slugs.count == 1, let slug = slugs.first {
+                    defaultModel = availableModels.first { $0.provider == slug && $0.modelID == model }
                 }
             }
         }
-        return choices
+        let choicesByModel = Dictionary(grouping: availableModels, by: \.modelID)
+        let sources = ["api_server", "desktop", "cli", "telegram", "oneshot"]
+        let interactiveSources = Set(sources)
+        var sessionsByID: [String: UsageSession] = [:]
+        for source in sources {
+            try Task.checkCancellation()
+            let page: Page = try await get(["api", "sessions"], query: [
+                URLQueryItem(name: "source", value: source),
+                URLQueryItem(name: "limit", value: "200"),
+                URLQueryItem(name: "include_children", value: "false")
+            ])
+            for row in page.data {
+                guard !row.id.isEmpty, row.hidden != true, row.archived != true,
+                      row.source.map({ interactiveSources.contains($0) }) ?? true,
+                      let model = row.model, choicesByModel[model] != nil else { continue }
+                if let previous = sessionsByID[row.id],
+                   previous.recency > row.recency ||
+                    (previous.recency == row.recency && previous.id <= row.id) { continue }
+                sessionsByID[row.id] = row
+            }
+        }
+        try Task.checkCancellation()
+        var sessionsByRoot: [String: UsageSession] = [:]
+        for row in sessionsByID.values {
+            let root = row.lineageRootID.flatMap { $0.isEmpty ? nil : $0 } ?? row.id
+            if let previous = sessionsByRoot[root],
+               previous.recency > row.recency ||
+                (previous.recency == row.recency && previous.id <= row.id) { continue }
+            sessionsByRoot[root] = row
+        }
+        var usageByIdentity: [String: Usage] = [:]
+        for row in sessionsByRoot.values {
+            guard let model = row.model, let candidates = choicesByModel[model] else { continue }
+            let choice: HermesModelChoice
+            if let configured = defaultModel, configured.modelID == model {
+                choice = configured
+            } else {
+                guard candidates.count == 1, let unique = candidates.first else { continue }
+                choice = unique
+            }
+            var usage = usageByIdentity[choice.id] ?? Usage(choice: choice, count: 0, recency: .distantPast)
+            usage.count += 1
+            usage.recency = max(usage.recency, row.recency)
+            usageByIdentity[choice.id] = usage
+        }
+        let ranked = usageByIdentity.values.sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            if $0.recency != $1.recency { return $0.recency > $1.recency }
+            return $0.choice.id < $1.choice.id
+        }
+        var suggestedModels = defaultModel.map { [$0] } ?? []
+        for usage in ranked where usage.choice.id != defaultModel?.id {
+            guard suggestedModels.count < 5 else { break }
+            suggestedModels.append(usage.choice)
+        }
+        return HermesModelInventory(defaultModel: defaultModel,
+                                    suggestedModels: suggestedModels, availableModels: availableModels)
     }
 
     func startRun(text: String, sessionKey: String, sessionID: String?, idempotencyKey: String, push: PushDestination? = nil, instructions: String? = nil, modelChoice: HermesModelChoice?) async throws -> RunReceipt {

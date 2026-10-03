@@ -9,90 +9,132 @@ struct ChatModelSelectionTests {
     private let first = HermesModelChoice(provider: "openrouter", modelID: "example/model-a", displayName: "Model A")
     private let second = HermesModelChoice(provider: "openrouter", modelID: "example/model-b", displayName: "Model B")
 
-    @Test("Loading the server catalog never selects its global default or admits an unchosen chat")
-    func noImplicitServerDefault() async throws {
+    @Test("Hermes default and common interactive models replace old preferences without catalogue refill")
+    func configuredDefaultAndCommonChoices() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = "HermesVoiceTests-\(UUID().uuidString)"
+        let settings = AppSettings(service: service)
+        let legacyPreference = KeychainItem(service: service, account: "nativePreferredChatModel")
+        defer { _ = legacyPreference.write(nil) }
+        #expect(legacyPreference.write(String(decoding: try JSONEncoder().encode(second), as: UTF8.self)))
+        var empty = Chat()
+        empty.modelChoice = second
+        let store = ChatStore(directory: directory)
+        try store.save(empty)
+        let server = StubServer { request in
+            if request.path == "/api/model/options" {
+                return .json(200, #"{"model":"example/model-a","provider":"openrouter","providers":[{"slug":"openrouter","authenticated":true,"models":["example/model-a","example/model-b","example/random"],"featured_models":["example/random"],"unavailable_models":[]}]}"#)
+            }
+            if request.path == "/api/sessions" {
+                return .json(200, #"{"data":[{"id":"common","source":"cli","model":"example/model-b","started_at":1,"last_active":2}]}"#)
+            }
+            return .json(500, #"{"error":"No inference expected"}"#)
+        }
+        let model = AppModel(settings: settings, store: store, client: server.client())
+        await model.refreshModelChoices()
+        #expect(model.configuredDefaultModel?.id == first.id)
+        #expect(model.selectedChatModel?.id == first.id)
+        #expect(store.chat(id: empty.id)?.modelChoice?.id == first.id)
+        #expect(model.modelChoices.map(\.id) == [first.id, second.id])
+        model.draft = "A new request"
+        #expect(model.canSend)
+        #expect(server.requests.allSatisfy { $0.method != "POST" })
+    }
+
+    @Test("Injected default labels normalize by exact identity and remain first after manual selection")
+    func normalizedDefaultFirstChoices() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = AppSettings(service: "HermesVoiceTests-\(UUID().uuidString)")
+        var olderLabel = first
+        olderLabel.displayName = "Old presentation"
+        let model = AppModel(settings: settings, store: ChatStore(directory: directory), initialModelChoices: [second, first], initialModelChoice: olderLabel)
+        #expect(model.selectedChatModel == first)
+        #expect(model.configuredDefaultModel == first)
+        model.selectChatModel(second)
+        #expect(model.selectedChatModel == second)
+        #expect(model.modelChoices.map(\.id) == [first.id, second.id])
+        model.newChat()
+        #expect(model.selectedChatModel == first)
+    }
+
+    @Test("Manual empty-chat choice survives inventory refresh but new chats use the latest server default")
+    func manualChoiceAndDefaultChange() async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = AppSettings(service: "HermesVoiceTests-\(UUID().uuidString)")
+        let useSecondDefault = Mutex(false)
+        let server = StubServer { request in
+            if request.path == "/api/model/options" {
+                let defaultID = useSecondDefault.withLock { $0 } ? "example/model-b" : "example/model-a"
+                return .json(200, "{\"model\":\"\(defaultID)\",\"provider\":\"openrouter\",\"providers\":[{\"slug\":\"openrouter\",\"authenticated\":true,\"models\":[\"example/model-a\",\"example/model-b\"],\"unavailable_models\":[]}]}")
+            }
+            if request.path == "/api/sessions" { return .json(200, #"{"data":[]}"#) }
+            return .json(500, #"{"error":"No inference expected"}"#)
+        }
+        let store = ChatStore(directory: directory)
+        let model = AppModel(settings: settings, store: store, client: server.client())
+        await model.refreshModelChoices()
+        model.newChat()
+        model.selectChatModel(second)
+        let manualID = try #require(model.selectedChatID)
+        await model.refreshModelChoices()
+        #expect(model.selectedChatModel?.id == second.id)
+        #expect(model.modelChoices.map(\.id) == [first.id])
+        model.newChat()
+        #expect(model.selectedChatModel?.id == first.id)
+        useSecondDefault.withLock { $0 = true }
+        await model.refreshModelChoices()
+        #expect(model.configuredDefaultModel?.id == second.id)
+        #expect(model.selectedChatModel?.id == second.id)
+        model.selectChatModel(first)
+        await model.refreshModelChoices()
+        #expect(model.selectedChatModel?.id == first.id)
+        model.newChat()
+        #expect(model.selectedChatModel?.id == second.id)
+        #expect(store.chat(id: manualID)?.modelChoice?.id == second.id)
+    }
+
+    @Test("A refreshed server default does not rewrite an existing nonempty chat")
+    func nonemptyChatKeepsExplicitChoice() async throws {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let settings = AppSettings(service: "HermesVoiceTests-\(UUID().uuidString)")
         let server = StubServer { request in
             if request.path == "/api/model/options" {
-                return .json(200, #"{"model":"server-global","provider":"openrouter","providers":[{"slug":"openrouter","authenticated":true,"models":["example/model-a","example/model-b"],"featured_models":["example/model-a"],"unavailable_models":[]}]}"#)
+                return .json(200, #"{"model":"example/model-b","provider":"openrouter","providers":[{"slug":"openrouter","authenticated":true,"models":["example/model-a","example/model-b"],"unavailable_models":[]}]}"#)
             }
-            return .json(500, #"{"error":"Unchosen model must not start an agent"}"#)
+            if request.path == "/api/sessions" { return .json(200, #"{"data":[]}"#) }
+            return .json(500, #"{"error":"No inference expected"}"#)
         }
+        var chat = Chat(messages: [ChatMessage(role: .assistant, text: "Already complete")])
+        chat.modelChoice = first
         let store = ChatStore(directory: directory)
+        try store.save(chat)
         let model = AppModel(settings: settings, store: store, client: server.client())
         await model.refreshModelChoices()
-        model.draft = "A new request"
-        #expect(model.modelChoices.count == 2)
-        #expect(model.selectedChatModel == nil)
-        #expect(!model.canSend)
-        model.sendText(model.draft)
-        #expect(store.chats.isEmpty)
-        #expect(server.requests.allSatisfy { $0.method != "POST" })
-    }
-
-    @Test("The five-choice menu preserves recent identities and accepts refreshed display labels")
-    func recentAndRenamedChoices() throws {
-        let directory = makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let settings = AppSettings(service: "HermesVoiceTests-\(UUID().uuidString)")
-        defer { try? settings.savePreferredChatModel(nil) }
-        let choices = (1...7).map { HermesModelChoice(provider: "openrouter", modelID: "example/model-\($0)", displayName: "Model \($0)") }
-        var olderLabel = choices[2]
-        olderLabel.displayName = "Old presentation"
-        var recent = Chat(updatedAt: .now)
-        recent.modelChoice = choices[6]
-        let store = ChatStore(directory: directory)
-        try store.save(recent)
-        let model = AppModel(settings: settings, store: store, initialModelChoices: choices, initialModelChoice: olderLabel)
-        model.selectedChatID = nil
-        model.draft = "A request"
-        #expect(model.selectedChatModel?.displayName == choices[2].displayName)
-        #expect(model.canSend)
-        #expect(model.modelChoices.map(\.id) == [choices[2], choices[6], choices[0], choices[1], choices[3]].map(\.id))
-        model.selectChatModel(olderLabel)
-        #expect(settings.preferredChatModel == choices[2])
-    }
-
-    @Test("Each chat retains its model while new chats use the last explicit preference")
-    func perChatSelectionAndNewChatPreference() throws {
-        let directory = makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let service = "HermesVoiceTests-\(UUID().uuidString)"
-        let settings = AppSettings(service: service)
-        defer { try? settings.savePreferredChatModel(nil) }
-        let store = ChatStore(directory: directory)
-        var original = Chat()
-        original.modelChoice = first
-        try store.save(original)
-        let model = AppModel(settings: settings, store: store, initialModelChoices: [first, second], initialModelChoice: first)
-        model.selectChatModel(second)
-        #expect(store.chat(id: original.id)?.modelChoice == second)
+        #expect(model.selectedChatModel?.id == first.id)
+        #expect(store.chat(id: chat.id)?.modelChoice == first)
+        #expect(model.modelChoices.map(\.id) == [second.id])
         model.newChat()
-        let newer = try #require(model.selectedChat)
-        #expect(newer.modelChoice == second)
-        model.selectChat(original.id)
-        model.selectChatModel(first)
-        model.selectChat(newer.id)
-        #expect(model.selectedChatModel == second)
-        model.newChat()
-        #expect(model.selectedChatModel == first)
-        #expect(AppSettings(service: service).preferredChatModel == first)
+        #expect(model.selectedChatModel?.id == second.id)
     }
 
-    @Test("A pending admission keeps its queued model when another chat changes the preference")
+    @Test("A pending admission keeps its frozen model when the server default changes")
     func pendingAdmissionKeepsQueuedModel() async throws {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let settings = AppSettings(service: "HermesVoiceTests-\(UUID().uuidString)")
-        defer { try? settings.savePreferredChatModel(nil) }
         let admission = DeferredStubResponse()
         let server = StubServer { request in
             switch request.path {
             case "/v1/runs": return .deferred(admission)
             case "/v1/runs/model-a":
                 return .json(200, #"{"run_id":"model-a","status":"completed","session_id":"model-a","output":"A completed reply"}"#)
+            case "/api/model/options":
+                return .json(200, #"{"model":"example/model-b","provider":"openrouter","providers":[{"slug":"openrouter","authenticated":true,"models":["example/model-a","example/model-b"],"unavailable_models":[]}]}"#)
+            case "/api/sessions": return .json(200, #"{"data":[]}"#)
             default: return .json(500, #"{"error":"No unrelated endpoint needed"}"#)
             }
         }
@@ -101,6 +143,9 @@ struct ChatModelSelectionTests {
         model.sendText("Use the selected model")
         let originalID = try #require(model.selectedChatID)
         try #require(await eventually { server.requests.contains { $0.path == "/v1/runs" } })
+        await model.refreshModelChoices()
+        #expect(model.configuredDefaultModel?.id == second.id)
+        #expect(model.selectedChatModel?.id == first.id)
         model.newChat()
         model.selectChatModel(second)
         admission.resolve(.json(202, #"{"run_id":"model-a","status":"queued"}"#))
@@ -108,7 +153,7 @@ struct ChatModelSelectionTests {
         let queued = try #require(store.chat(id: originalID)?.messages.first)
         #expect(queued.modelChoice == first)
         #expect(queued.submission?.modelChoice == first)
-        #expect(settings.preferredChatModel == second)
+        #expect(model.selectedChatModel?.id == second.id)
         let request = try #require(server.requests.first { $0.path == "/v1/runs" })
         let body = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
         #expect(body["provider"] as? String == first.provider)
@@ -120,7 +165,6 @@ struct ChatModelSelectionTests {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let settings = AppSettings(service: "HermesVoiceTests-\(UUID().uuidString)")
-        defer { try? settings.savePreferredChatModel(nil) }
         let admit = Mutex(false)
         let server = StubServer { request in
             switch request.path {
@@ -180,14 +224,12 @@ struct ChatModelSelectionTests {
         #expect(store.chat(id: chat.id)?.messages.first?.submission?.modelChoice == nil)
     }
 
-    @Test("Model selection failure rolls back the preferred model and does not change the chat")
-    func failedChatCommitRollsBackPreference() throws {
+    @Test("Model selection failure does not change the chat or configured default")
+    func failedChatCommitKeepsSelection() throws {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let service = "HermesVoiceTests-\(UUID().uuidString)"
         let settings = AppSettings(service: service)
-        defer { try? settings.savePreferredChatModel(nil) }
-        try settings.savePreferredChatModel(first)
         var chat = Chat()
         chat.modelChoice = first
         let store = ChatStore(directory: directory)
@@ -195,12 +237,11 @@ struct ChatModelSelectionTests {
         let index = directory.appending(path: "chats.json")
         try FileManager.default.removeItem(at: index)
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false)
-        let model = AppModel(settings: settings, store: store, initialModelChoices: [first, second])
+        let model = AppModel(settings: settings, store: store, initialModelChoices: [first, second], initialModelChoice: first)
         model.selectChatModel(second)
         #expect(model.alert != nil)
         #expect(model.selectedChatModel == first)
-        #expect(settings.preferredChatModel == first)
-        #expect(AppSettings(service: service).preferredChatModel == first)
+        #expect(model.configuredDefaultModel == first)
     }
 
     @Test("Changing only the speech voice retains the explicit chat-model catalog and selection")

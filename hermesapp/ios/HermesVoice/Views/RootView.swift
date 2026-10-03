@@ -143,14 +143,14 @@ struct RootView: View {
                 dismissKeyboard()
                 isModelPickerPresented = true
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: 4) {
                     Text(model.selectedChatModel?.displayName ?? "Choose model")
                         .font(.body.weight(.medium))
                         .lineLimit(1)
                     if model.isLoadingModels {
                         ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: model.modelSelectionError == nil ? "chevron.down" : "exclamationmark.circle")
+                    } else if model.modelSelectionError != nil {
+                        Image(systemName: "exclamationmark.circle")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
@@ -222,12 +222,15 @@ private struct ChatModelPicker: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                        Button("Retry") { Task { await model.refreshModelChoices() } }
+                            .disabled(model.isLoadingModels || !model.canChangeModel)
+                            .accessibilityIdentifier("refreshChatModelsButton")
                     }
                     .accessibilityIdentifier("chatModelsError")
                 }
                 if !model.modelChoices.isEmpty {
                     Section {
-                        ForEach(Array(model.modelChoices.prefix(5))) { choice in
+                        ForEach(model.modelChoices) { choice in
                             Button {
                                 model.selectChatModel(choice)
                                 dismiss()
@@ -239,6 +242,11 @@ private struct ChatModelPicker: View {
                                         Text("\(choice.provider) · \(choice.modelID)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                        if model.configuredDefaultModel?.id == choice.id {
+                                            Text("Hermes default")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -249,7 +257,6 @@ private struct ChatModelPicker: View {
                                             .accessibilityHidden(true)
                                     }
                                 }
-                                .padding(.vertical, 5)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -265,16 +272,9 @@ private struct ChatModelPicker: View {
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("chatModelsEmpty")
                 }
-                Section {
-                    Button {
-                        Task { await model.refreshModelChoices() }
-                    } label: {
-                        Label(model.modelSelectionError == nil ? "Refresh models" : "Retry", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(model.isLoadingModels || !model.canChangeModel)
-                    .accessibilityIdentifier("refreshChatModelsButton")
-                }
             }
+            .listStyle(.plain)
+            .contentMargins(.top, 0, for: .scrollContent)
             .navigationTitle("Choose model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

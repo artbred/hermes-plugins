@@ -7,7 +7,6 @@ final class AppSettings {
     private(set) var serverURL: String
     private(set) var token: String
     private(set) var voiceID: String
-    private(set) var preferredChatModel: HermesModelChoice?
     private(set) var storageError: String?
 
     static let defaultURL = "https://hermes.sashakuzina.com"
@@ -16,7 +15,7 @@ final class AppSettings {
     @ObservationIgnored private let writeKeychainItem: (KeychainItem, String?) -> Bool
 
     private enum Key: String {
-        case nativeServerURL, nativeAPIToken, nativeVoiceID, nativePreferredChatModel
+        case nativeServerURL, nativeAPIToken, nativeVoiceID
         // Read only during the one-time credential migration, then delete.
         case nativeSpeechURL, nativeSpeechToken
 
@@ -31,11 +30,6 @@ final class AppSettings {
         serverURL = savedServer ?? Self.defaultURL
         token = Key.nativeAPIToken.item(service: service).read() ?? ""
         voiceID = Key.nativeVoiceID.item(service: service).read() ?? SpeechVoice.defaultReferenceID
-        if let savedModel = Key.nativePreferredChatModel.item(service: service).read(),
-           let choice = try? JSONDecoder().decode(HermesModelChoice.self, from: Data(savedModel.utf8)),
-           choice.isValid {
-            preferredChatModel = choice
-        }
         let destination = Self.migratedURL(serverURL)
         if savedServer != nil || Key.nativeSpeechURL.item(service: service).read() != nil || Key.nativeSpeechToken.item(service: service).read() != nil {
             do {
@@ -76,18 +70,6 @@ final class AppSettings {
         storageError = nil
     }
 
-    func savePreferredChatModel(_ choice: HermesModelChoice?) throws {
-        guard choice?.isValid != false else { throw SettingsError.invalidModel }
-        let encoded = try choice.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
-        guard writeKeychainItem(Key.nativePreferredChatModel.item(service: keychainService), encoded) else {
-            let error = SettingsError.keychainPreference
-            storageError = error.localizedDescription
-            throw error
-        }
-        preferredChatModel = choice
-        storageError = nil
-    }
-
     func makeClient() -> APIClient? {
         Self.client(serverURL: serverURL, token: token)
     }
@@ -110,14 +92,12 @@ final class AppSettings {
     }
 
     private enum SettingsError: LocalizedError {
-        case invalidURL, invalidVoice, invalidModel, keychainPreference, keychain(restored: Bool)
+        case invalidURL, invalidVoice, keychain(restored: Bool)
 
         var errorDescription: String? {
             switch self {
             case .invalidURL: "Enter a valid HTTPS Hermes server URL."
             case .invalidVoice: "Enter a Fish voice ID containing exactly 32 hexadecimal characters."
-            case .invalidModel: "Choose a concrete provider and model from the available inventory."
-            case .keychainPreference: "The Keychain could not save your model preference. Your previous choice was kept. Unlock your iPhone and try again."
             case .keychain(true): "The Keychain could not save your connection. Your previous settings were kept. Unlock your iPhone and try again."
             case .keychain(false): "The Keychain could not save or fully restore your connection. Unlock your iPhone and save the server URL and token again."
             }
