@@ -1,8 +1,0 @@
-name: reminder
-version: 0.3.0
-description: "Per-turn proof-before-done checklists: opens checks for change requests, logs tool evidence, auto-closes on read-only verification, nudges until verified."
-author: Artem + Hermes
-license: MIT
-kind: standalone
-requires_hermes: ">=0.21.3"
-tags: [gatekeeper, obligations, middleware]

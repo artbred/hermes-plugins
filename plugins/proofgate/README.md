@@ -1,9 +1,9 @@
-# reminder
+# proofgate
 
-Asks for proof before "done". When a request changes something (remove,
-install/set up, update, schedule), reminder opens a short checklist for that
-turn, watches the tool calls, and nudges the model until a read-only check
-shows the result.
+Proof before "done". When a request changes something (remove, install/set
+up, update, schedule), proofgate opens a short checklist for that turn,
+watches the tool calls, and nudges the model until a read-only check shows
+the result. Formerly `reminder`.
 
 ## How it works
 
@@ -16,7 +16,7 @@ shows the result.
    signature and a result hash. Keys come from the Hermes `turn_id`, so two
    chats or two turns with the same text never share state.
 3. **Hint.** Before each model call, open checks are injected as a short
-   `[reminder]` block: "action ran but not verified yet — run a read-only
+   `[proofgate]` block: "action ran but not verified yet — run a read-only
    check". On Anthropic Messages the block is appended as a text part of the
    last user turn (a `system` entry inside `messages` would replace the whole
    system prompt); Chat Completions gets a trailing system message; other API
@@ -31,34 +31,32 @@ shows the result.
    what differs".
 
 It only nudges: it never blocks a tool call or edits the reply. Local SQLite
-and regexes only — no network, no model calls; every middleware body swallows
-its own errors.
+and regexes only — no network, no model calls, nothing leaves the machine;
+every middleware body swallows its own errors.
 
 ## Storage
 
-`$HERMES_HOME/reminder/ledger.db` (directory 0700, file 0600): `tasks`,
-`obligations` (open/done/expired), `touches`. Opening a 0.2 ledger migrates it
-in place and marks its old never-closed checks `expired`. Touches of turns
-that opened no checklist are pruned after 14 days. `REMINDER_DB` overrides
-the path.
-
-`flush.py` (system cron, every 30 min) syncs a few meaningful rows — new
-checklists, verified resolutions, tool failures inside checklist turns — to
-the Graphiti `infra` group, at most 8 triplets per run.
+`$HERMES_HOME/proofgate/ledger.db` (directory 0700, file 0600): `tasks`,
+`obligations` (open/done/expired), `touches`. Opening an older ledger
+migrates it in place and marks never-closed legacy checks `expired`. Touches
+of turns that opened no checklist are pruned after 14 days. `PROOFGATE_DB`
+overrides the path.
 
 ## Install
 
 ```bash
-cp -r plugins/reminder "$HERMES_HOME/plugins/"
-hermes plugins enable reminder
+cp -r plugins/proofgate "$HERMES_HOME/plugins/"
+hermes plugins enable proofgate
 ```
 
-No credentials or settings.
+No credentials or settings. Upgrading from `reminder`: disable and remove
+it, then move `$HERMES_HOME/reminder/ledger.db` to
+`$HERMES_HOME/proofgate/ledger.db` to keep history.
 
 ## Tests
 
 ```bash
-python3 plugins/reminder/tests/test_ledger.py
+python3 plugins/proofgate/tests/test_proofgate.py
 ```
 
 Pure tests (temp SQLite, no Hermes, no network): request detection, evidence

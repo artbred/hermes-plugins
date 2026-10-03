@@ -1,4 +1,4 @@
-"""Tests for the reminder ledger + rules + middleware (no Hermes, no network).
+"""Tests for the proofgate ledger + rules + middleware (no Hermes, no network).
 
 Run: python3 tests/test_ledger.py   (or pytest)
 """
@@ -23,12 +23,12 @@ def _db():
 
 
 def _plugin(db_path):
-    os.environ["REMINDER_DB"] = str(db_path)
+    os.environ["PROOFGATE_DB"] = str(db_path)
     spec = importlib.util.spec_from_file_location(
-        "reminder_under_test", ROOT / "__init__.py",
+        "proofgate_under_test", ROOT / "__init__.py",
         submodule_search_locations=[str(ROOT)])
     module = importlib.util.module_from_spec(spec)
-    sys.modules["reminder_under_test"] = module
+    sys.modules["proofgate_under_test"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -177,7 +177,7 @@ def test_render_and_failure_hint():
 
 
 def test_inject_shapes():
-    block = "[reminder] x"
+    block = "[proofgate] x"
     chat = {"messages": [{"role": "user", "content": "hi"}]}
     out = rules.inject(chat, block, "chat_completions")
     assert out["messages"][-1] == {"role": "system", "content": block}

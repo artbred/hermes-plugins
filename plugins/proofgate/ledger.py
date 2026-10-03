@@ -1,8 +1,8 @@
-"""Reminder ledger: per-turn tasks, obligations and the tool-touch log.
+"""Proofgate ledger: per-turn tasks, obligations and the tool-touch log.
 
 Pure storage. No network. Keys are per turn (hash of the Hermes turn id), so
 the same request text in two turns or two sessions never shares state.
-Graphiti holds the long-lived system map; this SQLite file is the working set.
+Nothing leaves this machine: the file is the only store.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 try:
     from .rules import CHECKLISTS
-except ImportError:  # imported as a plain module (tests, flush.py)
+except ImportError:  # imported as a plain module (tests)
     from rules import CHECKLISTS
 
 _LOCK = threading.Lock()
@@ -25,7 +25,7 @@ PRUNE_DAYS = 14
 
 
 def default_db() -> Path:
-    override = os.environ.get("REMINDER_DB")
+    override = os.environ.get("PROOFGATE_DB")
     if override:
         return Path(override)
     try:
@@ -33,7 +33,7 @@ def default_db() -> Path:
         home = Path(get_hermes_home())
     except Exception:
         home = Path.home() / ".hermes"
-    directory = home / "reminder"
+    directory = home / "proofgate"
     directory.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(directory, 0o700)

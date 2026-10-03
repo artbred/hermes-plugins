@@ -4,7 +4,7 @@ A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 ## Active plugins
 
-- [reminder](plugins/reminder/) **0.3.0** — proof before "done": change requests (remove, install/set up, update, schedule) open a per-turn checklist; tool calls are logged as evidence; checks close automatically after a read-only verification and the model is nudged until then. Local rules only, no model calls. Optional Graphiti `infra` sync via `flush.py`.
+- [proofgate](plugins/proofgate/) **0.4.0** — proof before "done": change requests (remove, install/set up, update, schedule) open a per-turn checklist; tool calls are logged as evidence; checks close automatically after a read-only verification and the model is nudged until then. Local rules only — no model calls, nothing leaves the machine. Formerly `reminder`.
 - [fish-speech](plugins/fish-speech/) **1.0.0** — Fish Audio speech: TTS (`s2.1-pro`) with per-reply language voice selection (local Cyrillic check first, Jev tiebreak; Russian replies use the Russian reference voice) plus Fish ASR transcription. Registers `tts.provider: fish` and `stt.provider: fish`.
 
 ## Speech provider plugin
@@ -61,16 +61,16 @@ The current speech plugin/service suite uses real Hermes registration and native
 )
 ```
 
-The `reminder` and `fish-speech` tests need no Hermes checkout:
+The `proofgate` and `fish-speech` tests need no Hermes checkout:
 
 ```bash
-python3 plugins/reminder/tests/test_ledger.py
+python3 plugins/proofgate/tests/test_proofgate.py
 (cd plugins/fish-speech && python -m pytest -q tests)   # needs httpx
 ```
 
 ## Privacy
 
-`reminder` keeps its ledger local (0600) and redacts secrets from recorded tool arguments; only `flush.py` sends a few summarized rows to the private Graphiti instance. `fish-speech` sends reply text to Fish Audio and, for undecided language, to OpenRouter (Jev). No API keys, private runtime configuration, authentication files, logs, conversation records, memory data, caches or historical backups are published.
+`proofgate` keeps its ledger local (0600), redacts secrets from recorded tool arguments, and sends nothing off the machine. `fish-speech` sends reply text to Fish Audio and, for undecided language, to OpenRouter (Jev). No API keys, private runtime configuration, authentication files, logs, conversation records, memory data, caches or historical backups are published.
 
 ## License
 

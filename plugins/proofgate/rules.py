@@ -1,4 +1,4 @@
-"""Pure rules for the reminder gatekeeper (no I/O, no Hermes imports).
+"""Pure rules for proofgate (no I/O, no Hermes imports).
 
 - detect_kinds(): which checklists a user request opens. Only imperative
   action verbs count (clause start, "and/then <verb>", or an explicit cue like
@@ -114,7 +114,7 @@ def detect_kinds(text: str) -> list:
 # Request payload helpers
 # --------------------------------------------------------------------------
 
-MARKER = "[reminder]"
+MARKER = "[proofgate]"
 
 
 def short_hash(text: str) -> str:

@@ -1,4 +1,4 @@
-"""Reminder plugin: per-turn obligation ledger + gatekeeper injection.
+"""Proofgate: proof before "done" — per-turn checklists, evidence, nudges.
 
 - ``tool_execution`` middleware records every tool call (tool, redacted
   argument text, ran/ok, signature, result hash) against the current turn,
@@ -72,7 +72,7 @@ def _observe_tool(**kwargs):
             finally:
                 con.close()
     except Exception:
-        logger.debug("reminder: touch not recorded", exc_info=True)
+        logger.debug("proofgate: touch not recorded", exc_info=True)
     if caught is not None:
         raise caught
     return result
@@ -147,10 +147,10 @@ def _gate_request(**kwargs):
         new_request = rules.inject(request, block, str(kwargs.get("api_mode") or ""))
         if new_request is None:
             return None
-        return {"request": new_request, "source": "reminder",
+        return {"request": new_request, "source": "proofgate",
                 "reason": "open verification checks"}
     except Exception:
-        logger.debug("reminder: gate skipped", exc_info=True)
+        logger.debug("proofgate: gate skipped", exc_info=True)
         return None
 
 
