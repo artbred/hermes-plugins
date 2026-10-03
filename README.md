@@ -4,6 +4,7 @@ A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 ## Active plugins
 
+- [reminder](plugins/reminder/) **0.1.0** — gatekeeper ledger: verb-derived checklists, per-task tool evidence, open-check injection while runs are fixable. Backed by the Graphiti `infra` system map.
 - [fish-speech](plugins/fish-speech/) **1.0.0** — Fish Audio speech: TTS (`s2.1-pro`) with per-reply Jev language voice selection (Russian replies use the Russian reference voice) plus Fish ASR transcription. Registers `tts.provider: fish` and `stt.provider: fish`. Replaces the old `tts.providers.fish` command entry.
 
 ## Archived plugins — retired
