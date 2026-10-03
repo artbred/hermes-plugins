@@ -172,6 +172,14 @@ struct ResponseContentTests {
         #expect(try elements(parsed(content), "blockquote").count == 1)
     }
 
+    @Test("Italic side notes render muted, stay in copy, but never reach speech")
+    func italicAsidesUnspoken() throws {
+        let content = ResponseContent(raw: "<p>Saved to your <strong>watchlist</strong>.</p><p><em>Verified live: 24 films with it on top.</em></p>")
+        #expect(content.plainText == "Saved to your watchlist.\n\nVerified live: 24 films with it on top.")
+        #expect(content.spokenText == "Saved to your watchlist.")
+        #expect(try elements(parsed(content), "em").count == 1)
+    }
+
     private func parsed(_ content: ResponseContent) throws -> SwiftSoup.Document {
         try SwiftSoup.parse(content.html)
     }

@@ -762,7 +762,7 @@ final class AppModel {
                 var fileName = current.hasSpeech(for: generalVoice) ? current.audioFileName : nil
                 if fileName == nil || !FileManager.default.fileExists(atPath: store.audioURL(fileName: fileName!).path) {
                     guard let client = makeClient() else { throw ChatError.notConfigured }
-                    let speechText = await Task.detached(priority: .userInitiated) { ResponseContent(raw: current.text).plainText }.value
+                    let speechText = await Task.detached(priority: .userInitiated) { ResponseContent(raw: current.text).spokenText }.value
                     try Task.checkCancellation()
                     guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else {
                         if automatic { continue }

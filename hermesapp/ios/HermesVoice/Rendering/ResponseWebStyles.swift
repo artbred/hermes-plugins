@@ -132,6 +132,7 @@ enum ResponseWebStyles {
           border-inline-start: 3px solid color-mix(in srgb, var(--hermes-accent) 45%, var(--hermes-border));
           color: var(--hermes-muted);
         }
+        :where(em, i) { color: var(--hermes-muted); }
         :where(figure) { margin-inline: 0; }
         :where(figcaption) { margin-top: 0.4em; font-size: 0.88em; color: var(--hermes-muted); }
         :where(img) { max-width: 100%; height: auto; }
