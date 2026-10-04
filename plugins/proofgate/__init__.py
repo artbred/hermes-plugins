@@ -5,11 +5,18 @@
   keyed by the Hermes turn id it is called with — no module-global task.
 - ``llm_request`` middleware opens checklist obligations from the turn's
   request (imperative verbs only), closes them automatically when a read-only
-  verification ran after the action, and injects the remaining open checks
-  plus a method-switch hint after repeated identical failures.
+  verification ran after the action, and injects the remaining open checks,
+  any injection blocks fired by the Jev scenario registry (e.g. ompx routing
+  for substantial coding turns), and a method-switch hint after repeated
+  identical failures.
 
-Local SQLite and regexes only: no network, no model calls. Every middleware
-body is exception-swallowed, so a plugin bug degrades to a no-op.
+Local SQLite and regexes first. For a non-question, non-internal request
+longer than 40 chars, the first model call of the turn makes ONE bounded Jev
+call (jev.py) asking every question in scenarios.yaml. The `checklist`
+scenario adds kinds (merged with the regex kinds); other scenarios fire
+injection blocks via their on_match. Any Jev failure means regex-only kinds
+and no blocks. Every middleware body is exception-swallowed, so a plugin bug
+degrades to a no-op.
 """
 
 from __future__ import annotations
@@ -17,15 +24,39 @@ from __future__ import annotations
 import logging
 import threading
 
-from . import ledger, rules
+from . import jev, ledger, rules
 
 logger = logging.getLogger(__name__)
 
 _STATE_LOCK = threading.Lock()
-_TURNS: dict = {}          # session key -> {"turn": str, "thash": str}
+_TURNS: dict = {}          # session key -> {"turn", "thash", "routes"}
 _MAX_SESSIONS = 256
 _FAIL_REPEAT = 2
 _PRUNED = {"done": False}
+_JEV_MIN_CHARS = 40
+
+
+def _jev_eligible(text: str) -> bool:
+    """Jev judges only substantive requests (regex hits included)."""
+    stripped = (text or "").strip()
+    return (len(stripped) > _JEV_MIN_CHARS and not rules._INTERNAL.search(text)
+            and not rules._is_question(text))
+
+
+def _judge_request(text: str):
+    """(kinds, routes): regex kinds merged with at most one Jev judgment's
+    checklist kinds, plus the registry injection blocks it fired."""
+    kinds = rules.detect_kinds(text) if text else []
+    if not _jev_eligible(text):
+        return kinds, ()
+    try:
+        verdicts = jev.judge_turn(text)
+        extra = [choice for choice, _confidence in verdicts.get("checklist", {}).values()
+                 if choice in rules.CHECKLISTS]
+        routes = tuple(jev.injections(verdicts))
+    except Exception:
+        return kinds, ()
+    return sorted(set(kinds) | set(extra)), routes
 
 
 def _turn_hash(kwargs) -> str:
@@ -86,20 +117,36 @@ def _remember_turn(session_key: str, turn: str, thash: str) -> bool:
             return False
         if len(_TURNS) >= _MAX_SESSIONS:
             _TURNS.pop(next(iter(_TURNS)))
-        _TURNS[session_key] = {"turn": turn, "thash": thash}
+        _TURNS[session_key] = {"turn": turn, "thash": thash, "routes": ()}
         return True
 
 
-def _repeated_failure(rows):
-    """(signature, count) for a call that failed >= N times without a later success."""
-    counts = {}
-    for _tid, tool, text, _ran, ok in rows:
+def _turn_routes(session_key: str, turn: str, routes=None) -> tuple:
+    """Set (when `routes` is given) and return this turn's injection blocks."""
+    with _STATE_LOCK:
+        current = _TURNS.get(session_key)
+        if not current or current["turn"] != turn:
+            return ()
+        if routes is not None:
+            current["routes"] = tuple(routes)
+        return current["routes"]
+
+
+def _repeated_failure(rows, window: int = 4):
+    """(signature, count) for a call that failed >= N times, still unresolved.
+
+    Stale failures expire: once `window` later touches happened since a
+    signature's last failure, the model has moved on (switched method)."""
+    counts, last_fail = {}, {}
+    for idx, (_tid, tool, text, _ran, ok) in enumerate(rows):
         sig = rules.signature(tool, text or "")
         if ok:
             counts.pop(sig, None)
         else:
             counts[sig] = counts.get(sig, 0) + 1
-    worst = max(counts.items(), key=lambda kv: kv[1], default=None)
+            last_fail[sig] = idx
+    recent = {s: c for s, c in counts.items() if len(rows) - 1 - last_fail[s] < window}
+    worst = max(recent.items(), key=lambda kv: kv[1], default=None)
     return worst if worst and worst[1] >= _FAIL_REPEAT else None
 
 
@@ -113,21 +160,25 @@ def _gate_request(**kwargs):
             return None
         session_key = str(kwargs.get("session_id") or kwargs.get("task_id") or "")
         turn = str(kwargs.get("turn_id") or thash)
+        first = _remember_turn(session_key, turn, thash)
+        text = rules.latest_user_text(request) if first else ""
+        # Before opening the ledger: the Jev call may take a few seconds.
+        if first:
+            kinds, routes = _judge_request(text)
+            routes = _turn_routes(session_key, turn, routes)
+        else:
+            kinds, routes = [], _turn_routes(session_key, turn)
         con = ledger.connect()
         try:
             if not _PRUNED["done"]:
                 _PRUNED["done"] = True
                 ledger.prune(con)
-            first = _remember_turn(session_key, turn, thash)
-            if first:
-                text = rules.latest_user_text(request)
-                kinds = rules.detect_kinds(text) if text else []
-                if kinds:
-                    ledger.open_task(con, thash, session_key, _redact(text)[:200], kinds)
+            if kinds:
+                ledger.open_task(con, thash, session_key, _redact(text)[:200], kinds)
             obligations = ledger.active_obligations(con, thash)
             rows = ledger.touches(con, thash)
             failure = _repeated_failure(rows)
-            if not obligations and not failure:
+            if not obligations and not failure and not routes:
                 return None
             state = rules.evaluate(rows, [k for k, _, _ in obligations])
             for kind, _detail, status in obligations:
@@ -139,7 +190,7 @@ def _gate_request(**kwargs):
             # Secret hygiene only nags once something secret-bearing was touched.
             shown = [(k, d) for k, d, _ in obligations
                      if k != "secret" or state.get(k, ("open",))[0] == "acted"]
-            block = rules.render(shown, state, failure)
+            block = rules.render(shown, state, failure, routes=routes)
         finally:
             con.close()
         if not block:
@@ -148,7 +199,7 @@ def _gate_request(**kwargs):
         if new_request is None:
             return None
         return {"request": new_request, "source": "proofgate",
-                "reason": "open verification checks"}
+                "reason": "open verification checks or Jev scenario injection"}
     except Exception:
         logger.debug("proofgate: gate skipped", exc_info=True)
         return None

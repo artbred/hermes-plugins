@@ -555,8 +555,13 @@ def _snip(text: str, limit: int) -> str:
 # Hint block
 # --------------------------------------------------------------------------
 
-def render(obligations, state: dict, failure=None, max_lines: int = 6) -> str:
-    """obligations: [(kind, detail)]; state from evaluate(); failure: (sig, n)."""
+def render(obligations, state: dict, failure=None, max_lines: int = 6,
+           routes=()) -> str:
+    """obligations: [(kind, detail)]; state from evaluate(); failure: (sig, n);
+    routes: one-line injection blocks from the Jev scenario registry.
+
+    Priority within max_lines: open checks, then routing blocks, then the
+    method-switch hint."""
     lines = []
     for kind, detail in obligations:
         status, info = state.get(kind, ("open", ""))
@@ -567,12 +572,16 @@ def render(obligations, state: dict, failure=None, max_lines: int = 6) -> str:
                          "run a read-only check after it before claiming done.")
         else:
             lines.append(f"- ({kind}) {detail}")
+    checks = len(lines)
+    lines.extend(routes)
     if failure:
         sig, count = failure
         lines.append(f"- (method) `{_snip(sig, 100)}` failed {count}x: switch "
                      "method and say in one line what differs from the last attempt.")
     if not lines:
         return ""
+    if not checks and routes:  # no open checks: routing stands alone
+        return "\n".join(lines[:max_lines])
     header = (f"{MARKER} Open checks for this request. Verify with fresh tool "
               "output; do not just claim:")
     return "\n".join([header] + lines[: max_lines - 1])
