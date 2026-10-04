@@ -3,7 +3,6 @@ import SwiftUI
 struct ChatListView: View {
     @Bindable var model: AppModel
     let close: () -> Void
-    let openSettings: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @State private var search = ""
     @State private var chatToDelete: Chat?
@@ -30,21 +29,6 @@ struct ChatListView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("Hermes")
-                    .font(.title2.weight(.medium))
-                Spacer(minLength: 8)
-                Button(action: close) {
-                    Image(systemName: "xmark")
-                        .font(.body.weight(.medium))
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("Close chats")
-                .accessibilityIdentifier("closeChatsButton")
-            }
-            .padding(.top, 8)
-            .padding(.horizontal, 20)
-
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -62,6 +46,7 @@ struct ChatListView: View {
                 }
             }
             .frame(minHeight: 44)
+            .padding(.top, 8)
             .padding(.horizontal, 24)
 
             VStack(spacing: 0) {
@@ -141,7 +126,7 @@ struct ChatListView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            Button(action: openSettings) {
+            Button { model.isSettingsPresented = true } label: {
                 Label("Settings", systemImage: "gearshape")
                     .font(.body)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -165,6 +150,7 @@ struct ChatListView: View {
             Text("This removes the local conversation, audio, and attachments. It does not delete the session on your Hermes server.")
         }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(.escape) { close() }
         .task(id: model.store.chats) {
             let messages = model.store.chats.flatMap(\.messages).filter { $0.role == .assistant }
             let cached = readableReplies

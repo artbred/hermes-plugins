@@ -27,9 +27,6 @@ struct RootView: View {
                         .toolbarBackground(HermesPalette.background(colorScheme), for: .navigationBar)
                         .toolbarBackground(.visible, for: .navigationBar)
                         .toolbar { chatToolbar }
-                        .navigationDestination(isPresented: $model.isSettingsPresented) {
-                            SettingsView(model: model)
-                        }
                         .tint(.primary)
                 }
                 .accessibilityHidden(model.isChatsPresented)
@@ -42,11 +39,7 @@ struct RootView: View {
                         .accessibilityAddTraits(.isButton)
                         .accessibilityIdentifier("chatMenuScrim")
                         .transition(.opacity)
-                    ChatListView(
-                        model: model,
-                        close: { closeMenu() },
-                        openSettings: presentSettings
-                    )
+                    ChatListView(model: model, close: closeMenu)
                     .frame(width: min(360, geometry.size.width * 0.9))
                     .background(HermesPalette.menu(colorScheme).ignoresSafeArea())
                     .shadow(color: .black.opacity(0.12), radius: 24, x: 8)
@@ -76,11 +69,17 @@ struct RootView: View {
         .onChange(of: model.isSettingsPresented) { _, presented in
             if presented {
                 dismissKeyboard()
-                model.isChatsPresented = false
             }
         }
         .onChange(of: model.selectedChatID) { _, _ in
             reviewedApproval = nil
+        }
+        .sheet(isPresented: $model.isSettingsPresented) {
+            NavigationStack {
+                SettingsView(model: model)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(item: $reviewedApproval) { approval in
             ApprovalView(model: model, approval: approval)
@@ -188,12 +187,6 @@ struct RootView: View {
     private func closeMenu() {
         dismissKeyboard()
         withAnimation(menuAnimation) { model.isChatsPresented = false }
-    }
-
-    private func presentSettings() {
-        dismissKeyboard()
-        model.isChatsPresented = false
-        model.isSettingsPresented = true
     }
 
     private func dismissKeyboard() {

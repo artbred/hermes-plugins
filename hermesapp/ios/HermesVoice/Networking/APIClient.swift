@@ -165,7 +165,7 @@ enum APIError: Error, Equatable, Sendable, LocalizedError {
     case runNotFound
     case rejected(status: Int, message: String)
     case server(status: Int, message: String)
-    case transport(String)
+    case transport(String, code: URLError.Code?)
     case invalidResponse(String)
     case missingAudio
     case cannotPrepare(String)
@@ -176,10 +176,20 @@ enum APIError: Error, Equatable, Sendable, LocalizedError {
         case .runNotFound: "The run’s status is unavailable. Check the chat history before retrying: actions may already have happened."
         case .rejected(let status, let message): "\(message) (HTTP \(status))"
         case .server(let status, let message): "Server error \(status): \(message)"
-        case .transport(let message): message
+        case .transport(let message, _): message
         case .invalidResponse(let message): "Unexpected server response: \(message)"
         case .missingAudio: "The recording file is missing."
         case .cannotPrepare(let message): "Could not prepare the request: \(message)"
+        }
+    }
+
+    var isTransientConnectionFailure: Bool {
+        guard case .transport(_, let code) = self else { return false }
+        switch code {
+        case .networkConnectionLost, .notConnectedToInternet, .timedOut, .dataNotAllowed:
+            return true
+        default:
+            return false
         }
     }
 }
@@ -1013,7 +1023,7 @@ struct APIClient: Sendable {
     private static func networkError(_ error: any Error) -> any Error {
         if error is CancellationError || (error as? URLError)?.code == .cancelled { return CancellationError() }
         if error is APIError { return error }
-        return APIError.transport(describe(error))
+        return APIError.transport(describe(error), code: (error as? URLError)?.code)
     }
 
     private static func check(status: Int, body: Data, accepted: Set<Int>) throws {

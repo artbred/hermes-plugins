@@ -95,6 +95,7 @@ final class AppModel {
     @ObservationIgnored private var isStartingRecording = false
     @ObservationIgnored private var startWhenActive = false
     @ObservationIgnored private var foreground = true
+    @ObservationIgnored private var speechLifecycleRevision = UUID()
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var networkAvailable: Bool?
@@ -900,10 +901,18 @@ final class AppModel {
 
     private func scheduleSpeech(_ message: ChatMessage, chatID: String) {
         guard speechTasks[message.id] == nil else { return }
+        let lifecycleRevision = speechLifecycleRevision
         speechTasks[message.id] = Task { [weak self] in
             guard let self else { return }
-            defer { speechTasks[message.id] = nil }
             await synthesizeAndPlay(message, chatID: chatID, automatic: true)
+            speechTasks[message.id] = nil
+            // Foreground resumption may run before a suspended request unwinds.
+            // Hand off once after that task releases its slot, never in a retry loop.
+            if foreground, lifecycleRevision != speechLifecycleRevision,
+               let pending = store.chat(id: chatID)?.messages.first(where: { $0.id == message.id }),
+               pending.needsSpeech {
+                scheduleSpeech(pending, chatID: chatID)
+            }
         }
     }
 
@@ -916,6 +925,7 @@ final class AppModel {
 
     private func synthesizeAndPlay(_ message: ChatMessage, chatID: String, automatic: Bool) async {
         guard message.role == .assistant, !synthesizingMessageIDs.contains(message.id) else { return }
+        let lifecycleRevision = speechLifecycleRevision
         synthesizingMessageIDs.insert(message.id)
         defer { synthesizingMessageIDs.remove(message.id) }
         while !Task.isCancelled {
@@ -986,12 +996,24 @@ final class AppModel {
                 }
                 return
             } catch {
-                if Task.isCancelled || error is CancellationError { return }
+                let cancelled = Task.isCancelled || error is CancellationError
+                let lifecycleInterrupted = !foreground || lifecycleRevision != speechLifecycleRevision
+                if cancelled && !lifecycleInterrupted { return }
                 guard revision == speechSelectionRevision, generalVoice == settings.speechVoice else {
                     if automatic { continue }
                     return
                 }
                 guard store.chat(id: chatID)?.messages.first(where: { $0.id == message.id })?.text == current.text else { return }
+                if lifecycleInterrupted, cancelled || (error as? APIError)?.isTransientConnectionFailure == true {
+                    do {
+                        try updateMessage(chatID, message.id) { $0.needsSpeech = true; $0.error = nil }
+                        if !automatic, foreground,
+                           let pending = store.chat(id: chatID)?.messages.first(where: { $0.id == message.id }) {
+                            scheduleSpeech(pending, chatID: chatID)
+                        }
+                    } catch { show(error, title: "Could not save audio state") }
+                    return
+                }
                 do {
                     try updateMessage(chatID, message.id) { $0.needsSpeech = false; $0.error = "Audio: \(error.localizedDescription)" }
                 } catch { show(error, title: "Could not save audio state") }
@@ -1114,6 +1136,7 @@ final class AppModel {
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
+        if foreground != (phase == .active) { speechLifecycleRevision = UUID() }
         switch phase {
         case .active:
             foreground = true
@@ -1126,7 +1149,17 @@ final class AppModel {
             }
         case .background:
             foreground = false
-            if !workers.isEmpty || !speechTasks.isEmpty {
+            // Listen requests are not scheduled speech tasks, but their in-flight
+            // synthesis must also survive termination after entering the background.
+            for chat in store.chats {
+                for message in chat.messages where message.role == .assistant
+                    && synthesizingMessageIDs.contains(message.id) && !message.needsSpeech {
+                    do {
+                        try updateMessage(chat.id, message.id) { $0.needsSpeech = true; $0.error = nil }
+                    } catch { show(error, title: "Could not save audio state") }
+                }
+            }
+            if backgroundTask == .invalid, !workers.isEmpty || !speechTasks.isEmpty {
                 backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Finish Hermes submission") { [weak self] in
                     MainActor.assumeIsolated {
                         guard let self else { return }

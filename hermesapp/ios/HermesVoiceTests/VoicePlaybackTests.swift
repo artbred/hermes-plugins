@@ -286,6 +286,181 @@ struct VoicePlaybackTests {
         #expect(model.alert == nil)
     }
 
+    @Test("Interrupted speech stays durable and recovers once without corrupting cached audio", arguments: [
+        ("foreground-before", false), ("foreground-before", true),
+        ("foreground-after", false), ("foreground-after", true),
+        ("relaunch", false), ("relaunch", true)
+    ], [URLError.Code.networkConnectionLost, .cancelled])
+    func interruptedSpeechRecovers(scenario: (String, Bool), failure: URLError.Code) async throws {
+        let (timing, automatic) = scenario
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = "HermesVoiceTests-\(UUID().uuidString)"
+        defer { Self.clearSettings(service) }
+        let settings = AppSettings(service: service)
+        let voice = settings.speechVoice
+        let oldAudio = Self.wave(seconds: 1)
+        let newAudio = Self.wave(seconds: 2)
+        let encodedAudio = newAudio.base64EncodedString()
+        let interrupted = DeferredStubResponse()
+        let recovered = DeferredStubResponse()
+        defer {
+            interrupted.resolve(.failure(failure))
+            recovered.resolve(Self.speechResponse(voice: voice, audio: encodedAudio))
+        }
+        let attempts = Mutex(0)
+        let server = StubServer { request in
+            if request.path == "/api/audio/voice" { return Self.selectionResponse(voice: voice) }
+            guard request.path == "/api/audio/speak" else { return .json(500, #"{"error":"Unexpected request"}"#) }
+            let attempt = attempts.withLock { $0 += 1; return $0 }
+            return .deferred(attempt == 1 ? interrupted : recovered)
+        }
+        let store = ChatStore(directory: directory)
+        try oldAudio.write(to: store.audioURL(fileName: "old.wav"))
+        try oldAudio.write(to: store.audioURL(fileName: "original.wav"))
+        let original = ChatMessage(role: .user, input: .voice, text: "Question", stage: .completed, audioFileName: "original.wav")
+        let reply = ChatMessage(role: .assistant, input: automatic ? .voice : .text, text: "Answer", stage: .completed,
+                                audioFileName: "old.wav", speechVoice: .russianVoice, speechGeneralVoice: .russianVoice, needsSpeech: automatic)
+        let chat = Chat(messages: [original, reply], titleGenerated: true)
+        try store.save(chat)
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
+        model.selectedChatID = nil
+        let listen: Task<Void, Never>? = automatic ? nil : Task { await model.play(reply) }
+        defer { listen?.cancel(); model.stopPlayback() }
+        if automatic { model.scenePhaseChanged(.active) }
+        try #require(await eventually { attempts.withLock { $0 } == 1 })
+        model.scenePhaseChanged(.inactive)
+        model.scenePhaseChanged(.background)
+        #expect(ChatStore(directory: directory).chat(id: chat.id)?.messages.last?.needsSpeech == true)
+
+        if timing == "foreground-before" { model.scenePhaseChanged(.active) }
+        interrupted.resolve(.failure(failure))
+        if timing != "foreground-before" {
+            try #require(await eventually { model.synthesizingMessageIDs.isEmpty })
+            #expect(attempts.withLock { $0 } == 1)
+        }
+        let pending = try #require(ChatStore(directory: directory).chat(id: chat.id)?.messages.last)
+        #expect(pending.needsSpeech)
+        #expect(pending.error == nil)
+        #expect(pending.audioFileName == reply.audioFileName)
+        #expect(pending.speechVoice == reply.speechVoice)
+        #expect(pending.speechGeneralVoice == reply.speechGeneralVoice)
+        #expect(try Data(contentsOf: store.audioURL(fileName: "old.wav")) == oldAudio)
+        #expect(try Data(contentsOf: store.audioURL(fileName: "original.wav")) == oldAudio)
+        #expect(try Set(FileManager.default.contentsOfDirectory(atPath: store.audioURL(fileName: "old.wav").deletingLastPathComponent().path)) == ["old.wav", "original.wav"])
+        #expect(model.alert == nil)
+
+        let resumedStore = timing == "relaunch" ? ChatStore(directory: directory) : store
+        let resumed = timing == "relaunch"
+            ? AppModel(settings: settings, store: resumedStore, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
+            : model
+        resumed.selectedChatID = nil
+        defer { resumed.stopPlayback() }
+        if timing != "foreground-before" { resumed.scenePhaseChanged(.active) }
+        try #require(await eventually { attempts.withLock { $0 } == 2 })
+        recovered.resolve(Self.speechResponse(voice: voice, audio: encodedAudio))
+        try #require(await eventually {
+            resumedStore.chat(id: chat.id)?.messages.last?.needsSpeech == false && resumed.synthesizingMessageIDs.isEmpty
+        })
+        await listen?.value
+        let saved = try #require(resumedStore.chat(id: chat.id)?.messages.last)
+        let name = try #require(saved.audioFileName)
+        #expect(saved.error == nil)
+        #expect(saved.speechVoice == voice)
+        #expect(saved.speechGeneralVoice == voice)
+        #expect(try Data(contentsOf: resumedStore.audioURL(fileName: name)) == newAudio)
+        #expect(!FileManager.default.fileExists(atPath: resumedStore.audioURL(fileName: "old.wav").path))
+        #expect(resumedStore.chat(id: chat.id)?.messages.first == original)
+        #expect(try Data(contentsOf: resumedStore.audioURL(fileName: "original.wav")) == oldAudio)
+        #expect(ChatStore(directory: directory).chat(id: chat.id)?.messages.last == saved)
+        #expect(resumed.alert == nil)
+        #expect(resumed.playingMessageID == nil)
+        await resumed.play(saved)
+        #expect(server.requests.map(\.path) == ["/api/audio/voice", "/api/audio/speak", "/api/audio/voice", "/api/audio/speak"])
+        // End the original instance's background allowance after simulating relaunch.
+        if timing == "relaunch" { try store.save(try #require(resumedStore.chat(id: chat.id))) }
+        model.scenePhaseChanged(.active)
+    }
+
+    @Test("A foreground connection failure remains visible, including after one lifecycle recovery", arguments: [false, true])
+    func speechRecoveryDoesNotLoop(interrupted: Bool) async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = "HermesVoiceTests-\(UUID().uuidString)"
+        defer { Self.clearSettings(service) }
+        let settings = AppSettings(service: service)
+        let voice = settings.speechVoice
+        let response = DeferredStubResponse()
+        defer { response.resolve(.failure(.networkConnectionLost)) }
+        let attempts = Mutex(0)
+        let server = StubServer { request in
+            if request.path == "/api/audio/voice" { return Self.selectionResponse(voice: voice) }
+            let attempt = attempts.withLock { $0 += 1; return $0 }
+            return attempt == 1 ? .deferred(response) : .failure(.networkConnectionLost)
+        }
+        let store = ChatStore(directory: directory)
+        let reply = ChatMessage(role: .assistant, input: .voice, text: "Answer", stage: .completed, needsSpeech: true)
+        let chat = Chat(messages: [reply], titleGenerated: true)
+        try store.save(chat)
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
+        model.selectedChatID = nil
+        model.scenePhaseChanged(.active)
+        try #require(await eventually { attempts.withLock { $0 } == 1 })
+        if interrupted {
+            model.scenePhaseChanged(.inactive)
+            model.scenePhaseChanged(.active)
+        }
+        response.resolve(.failure(.networkConnectionLost))
+        try #require(await eventually {
+            store.chat(id: chat.id)?.messages.last?.error != nil && model.synthesizingMessageIDs.isEmpty
+        })
+        let failed = try #require(ChatStore(directory: directory).chat(id: chat.id)?.messages.last)
+        #expect(failed.error == "Audio: The connection was lost.")
+        #expect(!failed.needsSpeech)
+        #expect(failed.audioFileName == nil)
+        #expect(attempts.withLock { $0 } == (interrupted ? 2 : 1))
+        model.scenePhaseChanged(.active)
+        #expect(attempts.withLock { $0 } == (interrupted ? 2 : 1))
+    }
+
+    @Test("Lifecycle changes do not hide server, certificate or invalid audio errors", arguments: ["server", "certificate", "invalid"])
+    func speechLifecyclePreservesRealErrors(failure: String) async throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = "HermesVoiceTests-\(UUID().uuidString)"
+        defer { Self.clearSettings(service) }
+        let settings = AppSettings(service: service)
+        let voice = settings.speechVoice
+        let response = DeferredStubResponse()
+        let result: StubResponse
+        switch failure {
+        case "server": result = .json(503, #"{"error":"Speech provider unavailable"}"#)
+        case "certificate": result = .failure(.serverCertificateUntrusted)
+        default: result = .json(200, #"{"ok":true}"#)
+        }
+        defer { response.resolve(result) }
+        let server = StubServer { request in
+            request.path == "/api/audio/voice" ? Self.selectionResponse(voice: voice) : .deferred(response)
+        }
+        let store = ChatStore(directory: directory)
+        let reply = ChatMessage(role: .assistant, input: .voice, text: "Answer", stage: .completed, needsSpeech: true)
+        let chat = Chat(messages: [reply], titleGenerated: true)
+        try store.save(chat)
+        let model = AppModel(settings: settings, store: store, client: server.client(), initialModelChoices: [.testModel], initialModelChoice: .testModel)
+        model.selectedChatID = nil
+        model.scenePhaseChanged(.active)
+        try #require(await eventually { server.requests.count == 2 })
+        model.scenePhaseChanged(.inactive)
+        response.resolve(result)
+        try #require(await eventually { model.synthesizingMessageIDs.isEmpty })
+        let failed = try #require(ChatStore(directory: directory).chat(id: chat.id)?.messages.last)
+        #expect(failed.error?.hasPrefix("Audio: ") == true)
+        #expect(!failed.needsSpeech)
+        #expect(failed.audioFileName == nil)
+        model.scenePhaseChanged(.active)
+        #expect(server.requests.count == 2)
+    }
+
     @Test("Replacing cached Russian reply text clears both voice markers and routes the latest visible prose")
     func editedRussianReplyRoutesReplacementText() async throws {
         let directory = makeTemporaryDirectory()
