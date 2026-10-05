@@ -376,23 +376,14 @@ private struct ChatScreen: View {
                 ChatTranscript(model: model, chat: chat, reviewApproval: reviewApproval)
                     .id(chat.id)
             } else if model.recorder.isRecording {
-                VStack(spacing: 18) {
-                    RecordingSparkle()
-                        .fill(AngularGradient(
-                            colors: [.blue, .green, .yellow, .red, .blue],
-                            center: .center
-                        ))
-                        .frame(width: 38, height: 38)
-                        .accessibilityHidden(true)
-                    Text("The mic is yours")
-                        .font(.system(.title, design: .rounded).weight(.light))
-                        .foregroundStyle(.primary.opacity(0.85))
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityIdentifier("recordingPrompt")
+                Text("The mic is yours")
+                    .font(.system(.title, design: .rounded).weight(.light))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("recordingPrompt")
             } else {
                 Color.clear.accessibilityIdentifier("emptyChat")
             }
@@ -442,23 +433,6 @@ private struct ChatScreen: View {
         }
     }
 
-}
-
-private struct RecordingSparkle: Shape {
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.midY),
-                              control: CGPoint(x: rect.midX + rect.width * 0.1, y: rect.midY - rect.height * 0.1))
-            path.addQuadCurve(to: CGPoint(x: rect.midX, y: rect.maxY),
-                              control: CGPoint(x: rect.midX + rect.width * 0.1, y: rect.midY + rect.height * 0.1))
-            path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.midY),
-                              control: CGPoint(x: rect.midX - rect.width * 0.1, y: rect.midY + rect.height * 0.1))
-            path.addQuadCurve(to: CGPoint(x: rect.midX, y: rect.minY),
-                              control: CGPoint(x: rect.midX - rect.width * 0.1, y: rect.midY - rect.height * 0.1))
-            path.closeSubpath()
-        }
-    }
 }
 
 private struct ChatTranscript: View {
