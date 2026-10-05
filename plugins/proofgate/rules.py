@@ -121,28 +121,50 @@ def short_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def latest_user_text(request) -> str:
-    """Newest human text in either OpenAI or Anthropic message shape."""
-    messages = request.get("messages") if isinstance(request, dict) else None
-    if not isinstance(messages, list):
-        return ""
-    for message in reversed(messages):
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        content = message.get("content", "")
-        if isinstance(content, str):
-            if content.strip() and not content.startswith(MARKER):
-                return content
-            continue
-        if isinstance(content, list):
-            parts = [p.get("text", "") for p in content
-                     if isinstance(p, dict) and p.get("type") == "text"
-                     and isinstance(p.get("text"), str)
-                     and not p.get("text", "").startswith(MARKER)]
-            text = "\n".join(parts).strip()
-            if text:
-                return text
+def _user_content_text(content) -> str:
+    if isinstance(content, str):
+        return content if content.strip() and not content.startswith(MARKER) else ""
+    if isinstance(content, list):
+        parts = [part["text"] for part in content
+                 if isinstance(part, dict)
+                 and part.get("type") in ("text", "input_text")
+                 and isinstance(part.get("text"), str)
+                 and not part["text"].startswith(MARKER)]
+        return "\n".join(parts).strip()
     return ""
+
+
+def user_texts(request) -> list[str]:
+    """Human text in order, excluding tool results and injected gate hints."""
+    if not isinstance(request, dict):
+        return []
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        messages = request.get("input")
+        if isinstance(messages, str):
+            text = _user_content_text(messages)
+            return [text] if text else []
+    if not isinstance(messages, list):
+        return []
+    texts = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user":
+            text = _user_content_text(message.get("content", ""))
+        elif message.get("type") == "input_text" and "role" not in message:
+            text = _user_content_text([message])
+        else:
+            continue
+        if text:
+            texts.append(text)
+    return texts
+
+
+def latest_user_text(request) -> str:
+    """Newest human text across Chat, Anthropic and Responses requests."""
+    texts = user_texts(request)
+    return texts[-1] if texts else ""
 
 
 def inject(request: dict, block: str, api_mode: str):
@@ -151,13 +173,25 @@ def inject(request: dict, block: str, api_mode: str):
     Anthropic Messages only accepts ``system`` at the top level, so the hint
     becomes an extra text block on the trailing user turn (after any cache
     breakpoints). Chat Completions gets a trailing system message, as before.
-    Other API shapes are left untouched (returns None).
+    Responses appends to top-level instructions, leaving input items and their
+    tool-call/result pairing intact. Unknown API shapes return None.
     """
+    mode = api_mode or "chat_completions"
+    if mode in ("codex_responses", "responses"):
+        source = request.get("input")
+        if not isinstance(source, (str, list)) or not source:
+            return None
+        instructions = request.get("instructions")
+        if instructions is not None and not isinstance(instructions, str):
+            return None
+        new_request = dict(request)
+        new_request["instructions"] = (
+            instructions + "\n\n" + block if instructions else block)
+        return new_request
     messages = request.get("messages")
     if not isinstance(messages, list) or not messages:
         return None
     messages = list(messages)
-    mode = api_mode or "chat_completions"
     if mode == "anthropic_messages":
         last = messages[-1]
         if not isinstance(last, dict) or last.get("role") != "user":
@@ -529,19 +563,21 @@ def result_hash(result) -> str:
 
 
 _SECRETISH = [
-    re.compile(r"(?i)\b((?:bearer|basic|token)\s+)(?=[A-Za-z0-9._~+/=\-]*\d)"
-               r"[A-Za-z0-9._~+/=\-]{6,}"),
+    re.compile(r"(?i)\b((?:bearer|basic)\s+)[A-Za-z0-9._~+/=\-]+"),
     re.compile(r"(?i)\b([A-Za-z_]*(?:key|token|secret|password|passwd|auth)[A-Za-z_]*)"
-               r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|(?:bearer\s+|basic\s+)?\S+)"),
+               r"([\"']?\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|(?:bearer\s+|basic\s+)?\S+)"),
 ]
 _OPAQUE = re.compile(r"\b(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[A-Za-z])[A-Za-z0-9_\-]{32,}\b")
+_PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----.*?"
+    r"-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----", re.DOTALL)
 
 
 def redact(text: str) -> str:
     """Best-effort local redaction (Hermes' redactor runs first when present)."""
     if not text:
         return ""
-    out = _SECRETISH[0].sub(lambda m: m.group(1) + "***", text)
+    out = _SECRETISH[0].sub(lambda m: m.group(1) + "***", _PRIVATE_KEY.sub("***", text))
     out = _SECRETISH[1].sub(lambda m: m.group(1) + m.group(2) + "***", out)
     return _OPAQUE.sub("***", out)
 

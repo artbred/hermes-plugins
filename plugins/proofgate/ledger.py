@@ -1,4 +1,4 @@
-"""Proofgate ledger: per-turn tasks, obligations and the tool-touch log.
+"""Proofgate ledger: per-turn obligations, tool evidence and completion gates.
 
 Pure storage. No network. Keys are per turn (hash of the Hermes turn id), so
 the same request text in two turns or two sessions never shares state.
@@ -7,6 +7,7 @@ Nothing leaves this machine: the file is the only store.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -20,8 +21,14 @@ except ImportError:  # imported as a plain module (tests)
 
 _LOCK = threading.Lock()
 _MIGRATED: set = set()
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PRUNE_DAYS = 14
+EVIDENCE_LIMIT = 32
+RESULT_TEXT_LIMIT = 2000
+CANDIDATE_LIMIT = 12000
+REASON_LIMIT = 2000
+GATE_STATE_LIMIT = 32768
+IDENTIFIER_LIMIT = 1024
 
 
 def default_db() -> Path:
@@ -68,6 +75,33 @@ CREATE TABLE IF NOT EXISTS touches (
   ok INTEGER NOT NULL,
   created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  result_text TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_turn
+  ON evidence(session_id, turn_id, id);
+CREATE TABLE IF NOT EXISTS gate_turns (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT '{}',
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (session_id, turn_id)
+);
+CREATE TABLE IF NOT EXISTS gate_reviews (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  candidate TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (session_id, turn_id)
+);
 """
 
 _COLUMNS = {
@@ -87,9 +121,10 @@ def _migrate(con: sqlite3.Connection) -> None:
         for name, decl in columns:
             if name not in present:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-    # v0 keyed tasks by message text and never auto-closed; those checks can
-    # no longer be matched to a turn, so retire them honestly.
-    con.execute("UPDATE obligations SET status='expired' WHERE status='open'")
+    if version < 1:
+        # v0 keyed tasks by message text and never auto-closed; those checks
+        # cannot be matched to a turn. v1 obligations remain valid in v2.
+        con.execute("UPDATE obligations SET status='expired' WHERE status='open'")
     con.execute("CREATE INDEX IF NOT EXISTS idx_touches_task ON touches(task_hash, id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_obl_task ON obligations(task_hash, status)")
     con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -186,12 +221,106 @@ def resolve_obligation(con, thash: str, kind: str, evidence: str) -> None:
         con.commit()
 
 
+def _gate_key(session_id: str, turn_id: str) -> tuple:
+    # Reject oversized keys rather than truncating them into another turn.
+    if any(not isinstance(key, str) or len(key) > IDENTIFIER_LIMIT
+           for key in (session_id, turn_id)):
+        raise ValueError("gate identifiers must be bounded strings")
+    return session_id, turn_id
+
+
+def record_evidence(con, session_id: str, turn_id: str, tool: str,
+                    result_text: str) -> int:
+    """Store already-redacted tool output; redaction belongs to the caller."""
+    key = _gate_key(session_id, turn_id)
+    with _LOCK, con:
+        cur = con.execute(
+            "INSERT INTO evidence (session_id, turn_id, tool, result_text, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (*key, tool[:60], result_text[:RESULT_TEXT_LIMIT], time.time()))
+        return cur.lastrowid
+
+
+def read_evidence(con, session_id: str, turn_id: str) -> list:
+    """Return the newest bounded result window in execution order."""
+    key = _gate_key(session_id, turn_id)
+    rows = con.execute(
+        "SELECT id, session_id, turn_id, tool, result_text, created_at FROM evidence"
+        " WHERE session_id=? AND turn_id=? ORDER BY id DESC LIMIT ?",
+        (*key, EVIDENCE_LIMIT)).fetchall()
+    fields = ("id", "session_id", "turn_id", "tool", "result_text", "created_at")
+    return [dict(zip(fields, (*row[:4], row[4][:RESULT_TEXT_LIMIT], row[5])))
+            for row in reversed(rows)]
+
+
+def load_gate(con, session_id: str, turn_id: str) -> dict | None:
+    """Read the gate payload, never mixing the durable retry counter into it."""
+    row = con.execute(
+        "SELECT state FROM gate_turns WHERE session_id=? AND turn_id=?",
+        _gate_key(session_id, turn_id)).fetchone()
+    return json.loads(row[0]) if row is not None else None
+
+
+def save_gate(con, session_id: str, turn_id: str, state: dict) -> None:
+    """Replace JSON state without resetting retries, even for a new candidate."""
+    key = _gate_key(session_id, turn_id)
+    if not isinstance(state, dict):
+        raise ValueError("gate state must be a JSON object")
+    encoded = json.dumps(state, ensure_ascii=False, separators=(",", ":"),
+                         allow_nan=False)
+    if len(encoded) > GATE_STATE_LIMIT:
+        raise ValueError("gate state exceeds storage limit")
+    with _LOCK, con:
+        con.execute(
+            "INSERT INTO gate_turns (session_id, turn_id, state, updated_at)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(session_id, turn_id)"
+            " DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+            (*key, encoded, time.time()))
+
+
+def claim_retry(con, session_id: str, turn_id: str, limit: int) -> int | None:
+    """Atomically reserve one retry; return its 1-based count or None at cap."""
+    key = _gate_key(session_id, turn_id)
+    if limit <= 0:
+        return None
+    with _LOCK, con:
+        row = con.execute(
+            "INSERT INTO gate_turns (session_id, turn_id, retry_count, updated_at)"
+            " VALUES (?, ?, 1, ?) ON CONFLICT(session_id, turn_id) DO UPDATE"
+            " SET retry_count=gate_turns.retry_count+1,"
+            " updated_at=excluded.updated_at WHERE gate_turns.retry_count < ?"
+            " RETURNING retry_count",
+            (*key, time.time(), limit)).fetchone()
+        return row[0] if row is not None else None
+
+
+def record_review(con, session_id: str, turn_id: str, candidate: str,
+                  verdict: str, reason: str) -> None:
+    """Retain the latest bounded, caller-redacted review for this exact turn."""
+    key = _gate_key(session_id, turn_id)
+    with _LOCK, con:
+        con.execute(
+            "INSERT INTO gate_reviews"
+            " (session_id, turn_id, candidate, verdict, reason, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, turn_id)"
+            " DO UPDATE SET candidate=excluded.candidate, verdict=excluded.verdict,"
+            " reason=excluded.reason, updated_at=excluded.updated_at",
+            (*key, candidate[:CANDIDATE_LIMIT], verdict[:60],
+             reason[:REASON_LIMIT], time.time()))
+
+
 def prune(con, days: int = PRUNE_DAYS) -> int:
-    """Drop old touches of turns that never opened a task."""
+    """Drop orphan touches and expire evidence/gate data after fourteen days."""
     cutoff = time.time() - days * 86400
     with _LOCK:
         cur = con.execute(
             "DELETE FROM touches WHERE created_at < ? AND task_hash NOT IN "
             "(SELECT task_hash FROM tasks)", (cutoff,))
+        count = cur.rowcount
+        for table, column in (("evidence", "created_at"),
+                              ("gate_turns", "updated_at"),
+                              ("gate_reviews", "updated_at")):
+            count += con.execute(
+                f"DELETE FROM {table} WHERE {column} < ?", (cutoff,)).rowcount
         con.commit()
-        return cur.rowcount
+        return count

@@ -199,7 +199,7 @@ def parse_subset(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-_TOP_KEYS = {"version", "untrusted_data_clause", "scenarios"}
+_TOP_KEYS = {"version", "untrusted_data_clause", "scenarios", "enforcement"}
 _SCENARIO_KEYS = {"threshold", "max_probability_must_win", "questions", "on_match", "blocks"}
 _QUESTION_KEYS = {"type", "instructions", "criteria"}
 _ABSTAIN = ("none", "no")
@@ -287,7 +287,32 @@ def build_registry(data) -> dict:
         scenarios.append({"name": name, "threshold": float(threshold),
                           "max_probability_must_win": must_win,
                           "questions": questions, "on_match": on_match, "blocks": blocks})
-    return {"scenarios": scenarios}
+    registry = {"scenarios": scenarios}
+    if "enforcement" in data:
+        raw = _mapping(data["enforcement"], "enforcement")
+        required = {"max_retries", "action_pattern", "subject_pattern", "carry_pattern",
+                    "skip_pattern", "messages", "scope", "outcome"}
+        if set(raw) != required:
+            raise ValueError("enforcement: invalid keys")
+        limit = raw["max_retries"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 5:
+            raise ValueError("enforcement: max_retries must be 1..5")
+        policy = {"max_retries": limit}
+        for name in ("action_pattern", "subject_pattern", "carry_pattern", "skip_pattern"):
+            policy[name] = _text(raw[name], f"enforcement.{name}")
+            re.compile(policy[name])
+        messages = _mapping(raw["messages"], "enforcement.messages")
+        if set(messages) != {"incomplete", "blocked", "unavailable", "invalid_token"}:
+            raise ValueError("enforcement: invalid messages")
+        policy["messages"] = {k: _text(v, f"enforcement.messages.{k}")
+                              for k, v in messages.items()}
+        for phase in ("scope", "outcome"):
+            policy[phase] = build_registry({
+                "version": 1, "untrusted_data_clause": clause,
+                "scenarios": {phase: raw[phase]},
+            })
+        registry["enforcement"] = policy
+    return registry
 
 
 _REGISTRY_LOCK = threading.Lock()
@@ -474,20 +499,49 @@ def judge_turn(text) -> dict:
         if not key:
             return {}
         body = request_body(text, registry)
-        box: dict = {}
+        return _judge_body(body, key, registry)
+    except Exception:
+        return {}
 
-        def work():
-            try:
-                box["payload"] = _fetch(body, key)
-            except BaseException:  # any failure -> fallback; never surfaces
-                box["payload"] = None
 
-        # Hard wall-clock bound: the turn waits at most TOTAL_SECONDS.
-        worker = threading.Thread(target=work, name="proofgate-jev", daemon=True)
-        worker.start()
-        worker.join(TOTAL_SECONDS)
-        if worker.is_alive() or "payload" not in box:
+def _judge_body(body: bytes, key: str, registry: dict) -> dict:
+    """Shared transport and validation for turn routing and outcome reviews."""
+    box: dict = {}
+
+    def work():
+        try:
+            box["payload"] = _fetch(body, key)
+        except BaseException:
+            box["payload"] = None
+
+    worker = threading.Thread(target=work, name="proofgate-jev", daemon=True)
+    worker.start()
+    worker.join(TOTAL_SECONDS)
+    if worker.is_alive() or "payload" not in box:
+        return {}
+    return judge_payload(box["payload"], registry)
+
+
+def judge_state(state: dict, phase: str) -> dict:
+    """Review bounded structured evidence using only the registry's questions.
+
+    No caller-supplied prompts or model override. Missing/weak/malformed answers
+    remain absent, so the enforcement caller can fail closed.
+    """
+    try:
+        registry = load_registry()
+        policy = registry.get("enforcement") if registry else None
+        if not policy or phase not in ("scope", "outcome"):
             return {}
-        return judge_payload(box["payload"], registry)
+        selected = policy[phase]
+        key = _api_key()
+        if not key:
+            return {}
+        questions = {name: question for scenario in selected["scenarios"]
+                     for name, question in scenario["questions"].items()}
+        body = json.dumps({"model": MODEL, "state": state, "questions": questions})
+        if len(body.encode("utf-8")) > 256 * 1024:
+            return {}
+        return _judge_body(body.encode("utf-8"), key, selected)
     except Exception:
         return {}

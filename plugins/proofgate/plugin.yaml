@@ -1,6 +1,6 @@
 name: proofgate
-version: 0.6.0
-description: "Proof before done: change requests open a per-turn checklist, tool calls are logged as evidence, checks auto-close after a read-only verification, the model is nudged until then."
+version: 0.7.0
+description: "YAML/Jev outcome enforcement with bounded native-loop continuation and explicit incomplete delivery, plus per-turn change-verification checklists."
 author: Artem + Hermes
 license: MIT
 kind: standalone

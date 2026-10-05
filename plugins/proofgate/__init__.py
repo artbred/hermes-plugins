@@ -1,22 +1,10 @@
-"""Proofgate: proof before "done" — per-turn checklists, evidence, nudges.
+"""Proofgate: checklist hints and YAML/Jev outcome enforcement.
 
-- ``tool_execution`` middleware records every tool call (tool, redacted
-  argument text, ran/ok, signature, result hash) against the current turn,
-  keyed by the Hermes turn id it is called with — no module-global task.
-- ``llm_request`` middleware opens checklist obligations from the turn's
-  request (imperative verbs only), closes them automatically when a read-only
-  verification ran after the action, and injects the remaining open checks,
-  any injection blocks fired by the Jev scenario registry (e.g. ompx routing
-  for substantial coding turns), and a method-switch hint after repeated
-  identical failures.
-
-Local SQLite and regexes first. For a non-question, non-internal request
-longer than 40 chars, the first model call of the turn makes ONE bounded Jev
-call (jev.py) asking every question in scenarios.yaml. The `checklist`
-scenario adds kinds (merged with the regex kinds); other scenarios fire
-injection blocks via their on_match. Any Jev failure means regex-only kinds
-and no blocks. Every middleware body is exception-swallowed, so a plugin bug
-degrades to a no-op.
+The gym-survey gate reviews actual results and proposed finals, then returns an
+explicit internal tool call through native execution middleware when authorized
+work remains. See enforcement.py and README.md for bounds and display/tool
+availability constraints. Checklist hints retain their existing fail-open policy;
+outcome-review uncertainty uses bounded continuation and explicit INCOMPLETE.
 """
 
 from __future__ import annotations
@@ -24,7 +12,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from . import jev, ledger, rules
+from . import enforcement, jev, ledger, rules
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +74,7 @@ def _observe_tool(**kwargs):
     except Exception as error:  # re-raised unchanged below
         caught = error
     try:
+        enforcement.observe_result(kwargs, result, caught)
         thash = _turn_hash(kwargs)
         if thash:
             text = rules.action_text(tool, payload)
@@ -153,6 +142,7 @@ def _repeated_failure(rows, window: int = 4):
 def _gate_request(**kwargs):
     request = kwargs.get("request")
     try:
+        enforcement.prepare(**kwargs)
         if not isinstance(request, dict):
             return None
         thash = _turn_hash(kwargs)
@@ -206,5 +196,14 @@ def _gate_request(**kwargs):
 
 
 def register(ctx):
+    policy = enforcement._policy()
+    if not policy:
+        raise ValueError("Proofgate enforcement registry is invalid; refusing activation")
+    ctx.register_tool(
+        name=enforcement.bridge.TOOL_NAME, toolset="proofgate",
+        schema=enforcement.bridge.tool_schema()["function"], handler=enforcement.control_tool,
+        description="Internal policy continuation control")
     ctx.register_middleware("tool_execution", _observe_tool)
     ctx.register_middleware("llm_request", _gate_request)
+    ctx.register_middleware("llm_execution", enforcement.execute)
+    ctx.register_hook("transform_llm_output", enforcement.transform)
