@@ -50,15 +50,15 @@ struct RootView: View {
         }
         .allowsHitTesting(!model.recorder.isRecording)
         .accessibilityHidden(model.recorder.isRecording)
-        .overlayPreferenceValue(RecordingSendBoundsKey.self) { sendBounds in
+        .overlayPreferenceValue(RecordingControlsBoundsKey.self) { controlsBounds in
             if model.recorder.isRecording {
                 GeometryReader { geometry in
                     ZStack(alignment: .topLeading) {
                         RecordingDiscardTarget { model.discardRecording() }
                             .ignoresSafeArea()
-                        if let sendBounds {
-                            let frame = geometry[sendBounds]
-                            RecordingSendButton(model: model)
+                        if let controlsBounds {
+                            let frame = geometry[controlsBounds]
+                            RecordingActions(model: model)
                                 .frame(width: frame.width, height: frame.height)
                                 .position(x: frame.midX, y: frame.midY)
                         }
@@ -375,6 +375,24 @@ private struct ChatScreen: View {
             if let chat = model.selectedChat, !chat.messages.isEmpty {
                 ChatTranscript(model: model, chat: chat, reviewApproval: reviewApproval)
                     .id(chat.id)
+            } else if model.recorder.isRecording {
+                VStack(spacing: 18) {
+                    RecordingSparkle()
+                        .fill(AngularGradient(
+                            colors: [.blue, .green, .yellow, .red, .blue],
+                            center: .center
+                        ))
+                        .frame(width: 38, height: 38)
+                        .accessibilityHidden(true)
+                    Text("The mic is yours")
+                        .font(.system(.title, design: .rounded).weight(.light))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("recordingPrompt")
             } else {
                 Color.clear.accessibilityIdentifier("emptyChat")
             }
@@ -388,16 +406,24 @@ private struct ChatScreen: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 LinearGradient(
-                    colors: [
-                        .clear,
-                        Color.indigo.opacity(colorScheme == .dark ? 0.14 : 0.035),
-                        Color.blue.opacity(colorScheme == .dark ? 0.20 : 0.06),
-                        HermesPalette.chatAccent(colorScheme)
-                    ],
+                    gradient: model.recorder.isRecording && colorScheme == .dark
+                        ? Gradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: Color(red: 3 / 255, green: 4 / 255, blue: 11 / 255), location: 0.3),
+                            .init(color: Color(red: 17 / 255, green: 24 / 255, blue: 59 / 255), location: 0.65),
+                            .init(color: Color(red: 22 / 255, green: 31 / 255, blue: 76 / 255), location: 0.85),
+                            .init(color: Color(red: 22 / 255, green: 31 / 255, blue: 76 / 255), location: 1)
+                        ])
+                        : Gradient(colors: [
+                            .clear,
+                            Color.indigo.opacity(colorScheme == .dark ? 0.14 : 0.035),
+                            Color.blue.opacity(colorScheme == .dark ? 0.20 : 0.06),
+                            HermesPalette.chatAccent(colorScheme)
+                        ]),
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 320)
+                .frame(height: model.recorder.isRecording ? 460 : 320)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea(.container, edges: .bottom)
@@ -416,6 +442,23 @@ private struct ChatScreen: View {
         }
     }
 
+}
+
+private struct RecordingSparkle: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.midY),
+                              control: CGPoint(x: rect.midX + rect.width * 0.1, y: rect.midY - rect.height * 0.1))
+            path.addQuadCurve(to: CGPoint(x: rect.midX, y: rect.maxY),
+                              control: CGPoint(x: rect.midX + rect.width * 0.1, y: rect.midY + rect.height * 0.1))
+            path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.midY),
+                              control: CGPoint(x: rect.midX - rect.width * 0.1, y: rect.midY + rect.height * 0.1))
+            path.addQuadCurve(to: CGPoint(x: rect.midX, y: rect.minY),
+                              control: CGPoint(x: rect.midX - rect.width * 0.1, y: rect.midY - rect.height * 0.1))
+            path.closeSubpath()
+        }
+    }
 }
 
 private struct ChatTranscript: View {
