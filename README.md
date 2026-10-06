@@ -4,7 +4,7 @@ A monorepo for custom [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 ## Active plugins
 
-- [proofgate](plugins/proofgate/) **0.4.0** — proof before "done": change requests (remove, install/set up, update, schedule) open a per-turn checklist; tool calls are logged as evidence; checks close automatically after a read-only verification and the model is nudged until then. Local rules only — no model calls, nothing leaves the machine. Formerly `reminder`.
+- [scenarios](plugins/scenarios/) **1.0.0** — registry-driven advisory routing through OpenRouter Jev. The initial scenario recommends background `ompx` for confident direct coding requests estimated to take an experienced engineer more than five minutes, including verification. No completion gates, task state, tool restrictions, or final-answer rewriting.
 - [fish-speech](plugins/fish-speech/) **1.0.0** — Fish Audio speech: TTS (`s2.1-pro`) with per-reply language voice selection (local Cyrillic check first, Jev tiebreak; Russian replies use the Russian reference voice) plus Fish ASR transcription. Registers `tts.provider: fish` and `stt.provider: fish`.
 
 ## Speech provider plugin
@@ -61,16 +61,16 @@ The current speech plugin/service suite uses real Hermes registration and native
 )
 ```
 
-The `proofgate` and `fish-speech` tests need no Hermes checkout:
+The `scenarios` offline suite includes native hook/context tests when a compatible Hermes checkout is on `PYTHONPATH`. Use a temporary `HERMES_HOME`, disable lazy installs, and disable bytecode writes; all classifier responses are synthetic and no provider calls are made. See [its test instructions](plugins/scenarios/README.md#offline-verification). The `fish-speech` tests need no Hermes checkout:
 
 ```bash
-python3 plugins/proofgate/tests/test_proofgate.py
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider plugins/scenarios/tests
 (cd plugins/fish-speech && python -m pytest -q tests)   # needs httpx
 ```
 
 ## Privacy
 
-`proofgate` keeps its ledger local (0600), redacts secrets from recorded tool arguments, and sends nothing off the machine. `fish-speech` sends reply text to Fish Audio and, for undecided language, to OpenRouter (Jev). No API keys, private runtime configuration, authentication files, logs, conversation records, memory data, caches or historical backups are published.
+`scenarios` can send only bounded, secret-redacted current human request text to OpenRouter Jev; it excludes history, system/developer messages, tool output, memory/context appendages, and media. Internal notices and unsafe or oversized inputs abstain. It persists no requests, answers, evidence, or task ledger. Credentials use Hermes's profile-scoped secret API; failures leave normal agent behavior unchanged. `fish-speech` sends reply text to Fish Audio and, for undecided language, to OpenRouter (Jev). No API keys, private runtime configuration, authentication files, logs, conversation records, memory data, caches or historical backups are published.
 
 ## License
 

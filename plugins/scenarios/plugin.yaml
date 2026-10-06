@@ -1,0 +1,10 @@
+name: scenarios
+version: 1.0.0
+description: "Registry-driven advisory routing through OpenRouter Jev for current human requests."
+author: Artem + Hermes
+license: MIT
+kind: standalone
+requires_hermes: ">=0.21.3"
+provides_hooks:
+  - pre_llm_call
+tags: [scenarios, routing]
