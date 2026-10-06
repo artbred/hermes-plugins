@@ -76,7 +76,7 @@ struct ComposerView: View {
             }
         }
         .frame(maxWidth: 760)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, model.recorder.isRecording ? 32 : 16)
         .padding(.top, 8)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
@@ -264,37 +264,27 @@ struct ComposerView: View {
     }
 
     private var recordingControls: some View {
-        VStack(spacing: 16) {
-            recordingHeaderLayout {
-                Label("Recording", systemImage: "record.circle")
-                    .font(.headline)
-                    .foregroundStyle(.red)
-                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                Text(Duration.seconds(model.recorder.elapsed), format: .time(pattern: .minuteSecond))
-                    .font(.title2.monospacedDigit())
-                    .accessibilityLabel("Recording duration")
-                    .accessibilityValue(Duration.seconds(model.recorder.elapsed).formatted(.time(pattern: .minuteSecond)))
-                    .accessibilityIdentifier("elapsedTime")
-            }
+        HStack(spacing: 8) {
+            Image(systemName: "plus")
+                .font(.system(size: 25, weight: .light))
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
             LevelMeter(levels: model.recorder.levels, reduceMotion: reduceMotion)
-                .frame(height: 40)
-            RecordingSendButton(model: model)
+                .frame(maxWidth: 104, minHeight: 24, maxHeight: 24)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
+            RecordingActions(model: model)
                 .hidden()
-                .anchorPreference(key: RecordingSendBoundsKey.self, value: .bounds) { $0 }
+                .anchorPreference(key: RecordingControlsBoundsKey.self, value: .bounds) { $0 }
         }
-        .padding(16)
-        .background(HermesPalette.control(colorScheme), in: RoundedRectangle(cornerRadius: 26))
-    }
-
-    private var recordingHeaderLayout: AnyLayout {
-        dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-            : AnyLayout(HStackLayout(alignment: .center))
+        .padding(.horizontal, 18)
+        .padding(.vertical, 18)
+        .background(HermesPalette.control(colorScheme), in: Capsule())
     }
 
 }
 
-struct RecordingSendBoundsKey: PreferenceKey {
+struct RecordingControlsBoundsKey: PreferenceKey {
     static var defaultValue: Anchor<CGRect>? { nil }
 
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
@@ -302,17 +292,46 @@ struct RecordingSendBoundsKey: PreferenceKey {
     }
 }
 
-struct RecordingSendButton: View {
+struct RecordingActions: View {
     @Bindable var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Button { model.stopAndSend() } label: {
-            Label("Send", systemImage: "arrow.up")
-                .frame(maxWidth: .infinity, minHeight: 32)
+        HStack(spacing: 4) {
+            Button { model.discardRecording() } label: {
+                Image(systemName: "stop")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .background(Color.primary.opacity(0.12), in: Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel("Discard recording")
+            .accessibilityHint("Stops recording without sending.")
+            .accessibilityIdentifier("discardRecordingButton")
+
+            Button { model.stopAndSend() } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        colorScheme == .dark
+                            ? Color(red: 0.14, green: 0.23, blue: 0.65)
+                            : HermesPalette.actionAccent(colorScheme),
+                        in: Circle()
+                    )
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel("Send recording")
+            .accessibilityIdentifier("stopSendButton")
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .accessibilityIdentifier("stopSendButton")
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Recording")
+        .accessibilityValue(Duration.seconds(model.recorder.elapsed).formatted(.time(pattern: .minuteSecond)))
     }
 }
 
@@ -322,15 +341,16 @@ private struct LevelMeter: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let spacing: CGFloat = 3
-            let count = max(levels.count, 1)
-            let width = max(1, (geometry.size.width - spacing * CGFloat(count - 1)) / CGFloat(count))
+            let count = 12
+            let spacing = max(0, (geometry.size.width - CGFloat(count) * 2) / CGFloat(count - 1))
             HStack(alignment: .center, spacing: spacing) {
-                ForEach(levels.indices, id: \.self) { index in
-                    let level = CGFloat(min(max(levels[index], 0), 1))
+                ForEach(0..<count, id: \.self) { index in
+                    let start = index * levels.count / count
+                    let end = (index + 1) * levels.count / count
+                    let level = CGFloat(min(max(levels[start..<end].max() ?? 0, 0), 1))
                     Capsule()
-                        .fill(Color.accentColor.opacity(0.4 + 0.6 * Double(level)))
-                        .frame(width: width, height: max(4, geometry.size.height * level))
+                        .fill(Color.primary.opacity(0.85))
+                        .frame(width: 2, height: max(4, geometry.size.height * level))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
