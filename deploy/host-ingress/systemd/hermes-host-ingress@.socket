@@ -1,0 +1,15 @@
+[Unit]
+Description=Private Unix ingress socket for Hermes %i
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/var/lib/hermes-host-ingress/sockets/%i.sock
+SocketUser=root
+SocketGroup=nogroup
+SocketMode=0660
+DirectoryMode=0750
+Accept=no
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

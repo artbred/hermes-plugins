@@ -1,0 +1,12 @@
+--- /etc/hosts
++++ /etc/hosts
+@@ -8,2 +8,3 @@
+ 127.0.0.1 localhost
++127.0.0.1 localhost4
+ 
+--- /etc/cloud/templates/hosts.debian.tmpl
++++ /etc/cloud/templates/hosts.debian.tmpl
+@@ -17,2 +17,3 @@
+ 127.0.0.1 localhost
++127.0.0.1 localhost4
+ 

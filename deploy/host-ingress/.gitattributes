@@ -1,0 +1,2 @@
+# Unified patches need a literal space for blank context lines.
+hosts/*.patch whitespace=-blank-at-eol,-blank-at-eof

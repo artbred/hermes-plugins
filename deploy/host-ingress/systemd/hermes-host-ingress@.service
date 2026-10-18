@@ -1,0 +1,19 @@
+[Unit]
+Description=Forward Hermes %i Unix ingress to native loopback
+Requires=hermes-host-ingress@%i.socket
+After=hermes-host-ingress@%i.socket
+
+[Service]
+EnvironmentFile=/etc/hermes-host-ingress/%i.conf
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd ${BACKEND}
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
