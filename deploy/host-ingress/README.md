@@ -55,6 +55,27 @@ For nested Git Compose paths, save an explicit native Compose command with
 `--env-file` pointing to the generated `.env` beside the Compose file; this
 avoids version-dependent project-directory environment lookup.
 
+## Readiness-gated local completion
+
+`cutover_local.py --check` is read-only and returns 75 while the authenticated
+API is not exclusively on loopback. The one-time systemd path/service watches
+the existing default-profile PID metadata and waits for a supported owner
+restart; it never signals or restarts the messaging service itself and uses no
+LLM polling. Each readiness attempt is bounded. After readiness it installs the
+staged push source/config with a hash guard, verifies named HTTPS API/audio/file
+and validation-only run paths, rejects missing keys, retires obsolete TCP
+relays/firewall grants, writes a private completion receipt and disables its
+watcher. An unexpected push source edit fails closed instead of overwriting it.
+
+Install the script and its staged files below `/opt/hermes-host-ingress`, keep
+`push-stage.json` operator-generated and private, and arm the path only after
+all rollback copies and new native socket paths are verified. Set the gateway's
+host to `localhost` in its environment and the provided user-unit drop-in;
+apply that listener change only with the supported owner command. Do not call
+this migration complete until `/var/lib/hermes-host-ingress/cutover.json` exists
+and live acceptance has been checked. Record failures from the one-shot unit's
+journal; no notification, paid inference or phone call is used as a test.
+
 ## Scope and hard gates
 
 - **API cutover is blocked until a user-supported `/restart`.** The running

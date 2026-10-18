@@ -1,0 +1,11 @@
+[Unit]
+Description=Arm one-time host ingress cutover after owner-controlled API restart
+ConditionPathExists=!/var/lib/hermes-host-ingress/cutover.json
+
+[Path]
+PathExists=/root/.hermes/gateway.pid
+PathChanged=/root/.hermes/gateway.pid
+Unit=hermes-host-ingress-cutover.service
+
+[Install]
+WantedBy=multi-user.target

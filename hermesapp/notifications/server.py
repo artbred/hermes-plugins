@@ -40,7 +40,7 @@ class Config:
         key_path = Path(os.environ["APNS_KEY_PATH"])
         return cls(
             api_key=os.environ["API_SERVER_KEY"],
-            native_url=os.environ.get("HERMES_NATIVE_URL", "http://172.23.0.1:8642"),
+            native_url=os.environ.get("HERMES_NATIVE_URL", "http://localhost:8642"),
             database=Path(os.environ.get("PUSH_DATABASE", "/var/lib/hermes-push/delivery.sqlite")),
             apns_key=key_path.read_text(),
             apns_key_id=os.environ["APNS_KEY_ID"],

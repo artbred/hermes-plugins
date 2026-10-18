@@ -1,0 +1,17 @@
+[Unit]
+Description=One-time readiness-gated host ingress cutover
+After=docker.service network-online.target
+ConditionPathExists=!/var/lib/hermes-host-ingress/cutover.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python /opt/hermes-host-ingress/cutover_local.py --wait 180
+TimeoutStartSec=240
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+Environment=PYTHONDONTWRITEBYTECODE=1
+StandardOutput=journal
+StandardError=journal
+RemainAfterExit=yes
