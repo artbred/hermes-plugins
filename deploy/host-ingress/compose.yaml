@@ -16,7 +16,7 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=65534,gid=65534,mode=0700
     volumes:
       - type: bind
-        source: ./nginx.conf
+        source: ${HOST_INGRESS_CONFIG_DIR:?Set the managed checkout config directory}/nginx.conf
         target: /etc/nginx/hermes-nginx.conf
         read_only: true
         bind:

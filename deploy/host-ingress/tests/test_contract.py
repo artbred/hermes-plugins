@@ -17,7 +17,7 @@ class Contract(unittest.TestCase):
     def test_compose_security_and_dns(self):
         result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.yaml"),
                                  "config", "--format", "json"], check=True, capture_output=True, text=True,
-                                env={**os.environ, "HOST_INGRESS_NETWORK": "fixture-isolated-ingress"})
+                                env={**os.environ, "HOST_INGRESS_CONFIG_DIR": str(ROOT)})
         config = json.loads(result.stdout)
         self.assertEqual(set(config["services"]), {"hermes-host-ingress"})
         service = config["services"]["hermes-host-ingress"]
@@ -46,7 +46,7 @@ class Contract(unittest.TestCase):
     def test_broker_profile_is_private_and_reuses_hardened_transport(self):
         result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.broker.yaml"),
                                  "config", "--format", "json"], check=True, capture_output=True, text=True,
-                                env={**os.environ, "HOST_INGRESS_NETWORK": "fixture-isolated-broker"})
+                                env={**os.environ, "HOST_INGRESS_CONFIG_DIR": str(ROOT)})
         config = json.loads(result.stdout)
         service = config["services"]["omp-host-ingress"]
         self.assertFalse(service.get("ports"))

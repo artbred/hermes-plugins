@@ -23,8 +23,15 @@ limits, and upstream authentication remain responsible for access control.
 Use Dokploy's native **isolatedDeployment=true** mode. Source Compose deliberately
 leaves networks unset: the installed native renderer adds the application's
 `appName` network exactly once, and Dokploy creates it and reconnects Traefik.
-Service/container names remain the stable Docker DNS targets. Only the adapter
-and Traefik should join that network. `expose` is metadata, not a firewall:
+Only the adapter and Traefik should join that network. Before first deployment,
+register a bridge network named exactly `appName` through Dokploy's network API
+with `internal=true` and `attachable=true`; then verify the native renderer and
+runtime membership. The isolated-app flag owns attachment/reconnection, while
+the registered network owns its network policy. An internal bridge does not
+replace Traefik's existing external default gateway. Do not rely on the native
+helper's non-internal auto-creation default, or deploy after deleting this
+registered network without reprovisioning its policy. `expose` is metadata,
+not a firewall:
 do not attach this adapter to the global shared ingress network. Keep all
 upstream authentication; native loopback applications may expose a bootstrap UI.
 
@@ -53,6 +60,10 @@ All source paths below are relative to this directory. Nothing here installs
 itself. Use **one** managed Compose deployment (e.g. a Dokploy Compose project)
 with `nginx.conf` present alongside `compose.yaml` in its working directory.
 Do not paste the Compose YAML into a manager that cannot materialize that file.
+Set `HOST_INGRESS_CONFIG_DIR` to the absolute managed checkout directory
+containing these configuration files, normally
+`/etc/dokploy/compose/<appName>/code/deploy/host-ingress`. This avoids relying on
+version-specific Compose `--project-directory` behavior for bind mount sources.
 The adapter must run on the host that owns the sockets. This is Docker Compose,
 not a multi-node `docker stack deploy` recipe. Do not recreate or modify `dokploy-network`; the native isolated-deployment
 network is separate. Keep `isolatedDeploymentsVolume=false`, and inspect the
