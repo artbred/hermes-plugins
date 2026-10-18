@@ -16,7 +16,8 @@ PIN = "nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d77
 class Contract(unittest.TestCase):
     def test_compose_security_and_dns(self):
         result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.yaml"),
-                                 "config", "--format", "json"], check=True, capture_output=True, text=True)
+                                 "config", "--format", "json"], check=True, capture_output=True, text=True,
+                                env={**os.environ, "HOST_INGRESS_NETWORK": "fixture-isolated-ingress"})
         config = json.loads(result.stdout)
         self.assertEqual(set(config["services"]), {"hermes-host-ingress"})
         service = config["services"]["hermes-host-ingress"]
@@ -29,9 +30,10 @@ class Contract(unittest.TestCase):
         self.assertNotIn("extra_hosts", service)
         self.assertNotIn("privileged", service)
         self.assertNotIn("network_mode", service)
-        self.assertEqual(set(service["networks"]), {"dokploy-network"})
-        self.assertIn("hermes-host-ingress", service["networks"]["dokploy-network"]["aliases"])
-        self.assertTrue(config["networks"]["dokploy-network"]["external"])
+        self.assertEqual(set(service["networks"]), {"default"})
+        self.assertNotIn("dokploy-network", config["networks"])
+        self.assertNotIn("networks:", (ROOT / "compose.yaml").read_text())
+        self.assertEqual(service["labels"]["traefik.enable"], "false")
         self.assertEqual(set(map(str, service["expose"])), set(map(str, PORTS.values())))
         self.assertTrue(service["tmpfs"])
         mounts = {v["target"]: v for v in service["volumes"]}
@@ -40,6 +42,26 @@ class Contract(unittest.TestCase):
         self.assertTrue(sockets["read_only"])
         self.assertFalse(sockets.get("bind", {}).get("create_host_path", False))
         self.assertTrue(mounts["/etc/nginx/hermes-nginx.conf"]["read_only"])
+
+    def test_broker_profile_is_private_and_reuses_hardened_transport(self):
+        result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.broker.yaml"),
+                                 "config", "--format", "json"], check=True, capture_output=True, text=True,
+                                env={**os.environ, "HOST_INGRESS_NETWORK": "fixture-isolated-broker"})
+        config = json.loads(result.stdout)
+        service = config["services"]["omp-host-ingress"]
+        self.assertFalse(service.get("ports"))
+        self.assertEqual(service["image"], PIN)
+        self.assertEqual(service["user"], "65534:65534")
+        self.assertTrue(service["read_only"])
+        self.assertEqual(service["labels"]["traefik.enable"], "false")
+        self.assertEqual(set(service["networks"]), {"default"})
+        self.assertNotIn("dokploy-network", config["networks"])
+        self.assertNotIn("networks:", (ROOT / "compose.broker.yaml").read_text())
+        self.assertEqual(set(map(str, service["expose"])), {"8765"})
+        self.assertEqual((ROOT / "backends/broker.conf").read_text(), "BACKEND=localhost4:8765\n")
+        nginx = (ROOT / "nginx-omp.conf").read_text()
+        self.assertIn("proxy_pass http://unix:/sockets/broker.sock;", nginx)
+        self.assertNotRegex(nginx, r"(?:\d{1,3}\.){3}\d{1,3}")
 
     def test_nginx_routes_and_transparency(self):
         config = (ROOT / "nginx.conf").read_text()

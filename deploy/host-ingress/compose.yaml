@@ -10,6 +10,8 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=65534,gid=65534,mode=0700
     volumes:
@@ -26,10 +28,3 @@ services:
         bind:
           create_host_path: false
     expose: ["8642", "9120", "9122", "9123"]
-    networks:
-      dokploy-network:
-        aliases: [hermes-host-ingress]
-networks:
-  dokploy-network:
-    external: true
-    name: dokploy-network

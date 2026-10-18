@@ -1,0 +1,30 @@
+# Reuse the native isolated-Compose network; no host publication.
+services:
+  omp-host-ingress:
+    image: nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d7702ba
+    container_name: omp-host-ingress
+    user: "65534:65534"
+    entrypoint: ["nginx"]
+    command: ["-c", "/etc/nginx/hermes-nginx.conf", "-g", "daemon off;"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=65534,gid=65534,mode=0700
+    volumes:
+      - type: bind
+        source: ./nginx-omp.conf
+        target: /etc/nginx/hermes-nginx.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/hermes-host-ingress/sockets
+        target: /sockets
+        read_only: true
+        bind:
+          create_host_path: false
+    expose: ["8765"]

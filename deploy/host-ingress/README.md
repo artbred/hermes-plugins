@@ -5,7 +5,7 @@ Reuses the installed official **nginx 1.29.5** image; no custom proxy applicatio
 image build, paid dependency, credentials, or Docker socket mount.
 
 ```
-Traefik -> hermes-host-ingress:<port> (Docker DNS, dokploy-network)
+Traefik -> hermes-host-ingress:<port> (Docker DNS, managed isolated network)
         -> /sockets/<name>.sock (read-only bind of persistent directory)
         -> systemd-socket-proxyd -> localhost4:<native-port>
 ```
@@ -20,8 +20,18 @@ Traefik -> hermes-host-ingress:<port> (Docker DNS, dokploy-network)
 There are **no published host ports**, numeric-IP upstream targets, extra hosts,
 public listeners, or new authentication policy. Existing Traefik routing,
 limits, and upstream authentication remain responsible for access control.
-Other containers on the shared network can reach the adapter: `expose` is
-metadata, not a firewall. Do not put an unauthenticated backend behind it.
+Use Dokploy's native **isolatedDeployment=true** mode. Source Compose deliberately
+leaves networks unset: the installed native renderer adds the application's
+`appName` network exactly once, and Dokploy creates it and reconnects Traefik.
+Service/container names remain the stable Docker DNS targets. Only the adapter
+and Traefik should join that network. `expose` is metadata, not a firewall:
+do not attach this adapter to the global shared ingress network. Keep all
+upstream authentication; native loopback applications may expose a bootstrap UI.
+
+Artbred uses `compose.broker.yaml` and `nginx-omp.conf` for the same transport
+with Docker DNS `omp-host-ingress`, port 8765, and the `broker.sock` instance.
+Its optional `systemd/omp-broker-loopback.conf` drop-in changes only the broker
+bind to the verified IPv4 loopback name; it does not change vault credentials.
 
 ## Scope and hard gates
 
@@ -44,8 +54,10 @@ itself. Use **one** managed Compose deployment (e.g. a Dokploy Compose project)
 with `nginx.conf` present alongside `compose.yaml` in its working directory.
 Do not paste the Compose YAML into a manager that cannot materialize that file.
 The adapter must run on the host that owns the sockets. This is Docker Compose,
-not a multi-node `docker stack deploy` recipe. The inspected Kuzin network is
-an existing attachable overlay named `dokploy-network`; never recreate it.
+not a multi-node `docker stack deploy` recipe. Do not recreate or modify `dokploy-network`; the native isolated-deployment
+network is separate. Keep `isolatedDeploymentsVolume=false`, and inspect the
+rendered Compose before deploy to confirm the explicit stable DNS alias survives
+Dokploy's service-name collision prevention and no shared network is attached.
 
 | Source | Install destination | Owner/mode |
 |---|---|---|
