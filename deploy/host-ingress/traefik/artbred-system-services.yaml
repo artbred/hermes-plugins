@@ -1,0 +1,25 @@
+http:
+  routers:
+    legacy-ompbroker:
+      rule: Host(`ompbroker.artbred.xyz`)
+      entryPoints:
+        - websecure
+      service: legacy-ompbroker-svc
+      tls:
+        certResolver: letsencrypt-dns
+    legacy-infisical:
+      rule: Host(`infisical.artbred.xyz`)
+      entryPoints:
+        - websecure
+      service: legacy-infisical-svc
+      tls:
+        certResolver: letsencrypt-dns
+  services:
+    legacy-ompbroker-svc:
+      loadBalancer:
+        servers:
+          - url: http://omp-host-ingress:8765
+    legacy-infisical-svc:
+      loadBalancer:
+        servers:
+          - url: http://omp-host-ingress:8080

@@ -39,6 +39,21 @@ Artbred uses `compose.broker.yaml` and `nginx-omp.conf` for the same transport
 with Docker DNS `omp-host-ingress`, port 8765, and the `broker.sock` instance.
 Its optional `systemd/omp-broker-loopback.conf` drop-in changes only the broker
 bind to the verified IPv4 loopback name; it does not change vault credentials.
+The broker profile also reaches the existing Infisical backend by service DNS
+on its declared legacy network and relays port 8080. This lets Traefik retain
+only controller-owned isolated attachments rather than a manually attached
+`vaultwarden_private` network. The profile uses Docker's embedded DNS resolver
+only as resolver infrastructure, supports backend IP changes and WebSocket
+upgrades, and does not publish either port. Apply the versioned
+`traefik/artbred-system-services.yaml` only after both private probes pass.
+
+Dokploy 0.29 lacks the network-registry API: bootstrap the same labelled,
+internal/attachable Docker bridge once from the recorded app name before
+native deployment, and verify its policy. Dokploy 0.30 can register it through
+`network.create`. Do not replace the internal bridge with a default bridge.
+For nested Git Compose paths, save an explicit native Compose command with
+`--env-file` pointing to the generated `.env` beside the Compose file; this
+avoids version-dependent project-directory environment lookup.
 
 ## Scope and hard gates
 

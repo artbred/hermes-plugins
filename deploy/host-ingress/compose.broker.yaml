@@ -27,4 +27,10 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    expose: ["8765"]
+    expose: ["8765", "8080"]
+    networks:
+      legacy-infisical: {}
+networks:
+  legacy-infisical:
+    external: true
+    name: vaultwarden_private
