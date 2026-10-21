@@ -6,7 +6,7 @@ http:
         - websecure
       service: legacy-ompbroker-svc
       middlewares:
-        - tailnet-only
+        - tailnet-only@file
       tls:
         certResolver: letsencrypt-dns
     legacy-infisical:
@@ -14,18 +14,10 @@ http:
       entryPoints:
         - websecure
       service: legacy-infisical-svc
+      middlewares:
+        - tailnet-only@file
       tls:
         certResolver: letsencrypt-dns
-  middlewares:
-    # Direct source address only (no forwarded headers): tailnet peers, plus
-    # this host's own loopback and Docker bridges for local clients.
-    tailnet-only:
-      ipAllowList:
-        sourceRange:
-          - 100.64.0.0/10
-          - fd7a:115c:a1e0::/48
-          - 127.0.0.1/32
-          - 172.16.0.0/12
   services:
     legacy-ompbroker-svc:
       loadBalancer:

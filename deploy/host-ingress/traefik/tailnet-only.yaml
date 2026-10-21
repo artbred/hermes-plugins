@@ -1,0 +1,16 @@
+# Live copy: /etc/dokploy/traefik/dynamic/tailnet-only.yml on artbred.
+# Reference as `tailnet-only@file` from file routers and Docker labels.
+# Matches the direct source address only (no forwarded headers). On-host
+# clients reach Traefik through Docker NAT, so they appear from the Docker
+# bridge (172.16.0.0/12) or single-node Swarm overlay (10.0.0.0/8) ranges.
+http:
+  middlewares:
+    tailnet-only:
+      ipAllowList:
+        sourceRange:
+          - 100.64.0.0/10
+          - fd7a:115c:a1e0::/48
+          - 127.0.0.0/8
+          - ::1/128
+          - 172.16.0.0/12
+          - 10.0.0.0/8

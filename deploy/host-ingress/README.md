@@ -48,8 +48,13 @@ upgrades, and does not publish either port. Apply the versioned
 `traefik/artbred-system-services.yaml` only after both private probes pass;
 its live copy is `/etc/dokploy/traefik/dynamic/legacy-gateway.yml`.
 
-The broker router is tailnet-only through the `tailnet-only` `ipAllowList`
-(tailnet ranges plus host loopback/Docker bridges); public requests get 403.
+Every tailnet-only route on artbred uses the one shared `tailnet-only@file`
+`ipAllowList` from `traefik/tailnet-only.yaml` (live copy
+`/etc/dokploy/traefik/dynamic/tailnet-only.yml`): tailnet ranges plus host
+loopback and on-host Docker networks. Public requests get 403. File routes
+(broker, Infisical) list it under `middlewares`; Docker-label routes (searxng,
+Hindsight) set `traefik.http.routers.<name>.middlewares=tailnet-only@file`.
+A DNS record pointing at the tailnet IP alone does not make a route private.
 Tailnet clients reach Traefik's `0.0.0.0:443` publish directly through
 `tailscale0`, so never add `tailscale serve --tcp 443`: it takes
 `100.95.234.17:443` first and Traefik then fails to bind 443 after a Docker
