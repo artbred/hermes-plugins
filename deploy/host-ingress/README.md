@@ -45,7 +45,15 @@ only controller-owned isolated attachments rather than a manually attached
 `vaultwarden_private` network. The profile uses Docker's embedded DNS resolver
 only as resolver infrastructure, supports backend IP changes and WebSocket
 upgrades, and does not publish either port. Apply the versioned
-`traefik/artbred-system-services.yaml` only after both private probes pass.
+`traefik/artbred-system-services.yaml` only after both private probes pass;
+its live copy is `/etc/dokploy/traefik/dynamic/legacy-gateway.yml`.
+
+The broker router is tailnet-only through the `tailnet-only` `ipAllowList`
+(tailnet ranges plus host loopback/Docker bridges); public requests get 403.
+Tailnet clients reach Traefik's `0.0.0.0:443` publish directly through
+`tailscale0`, so never add `tailscale serve --tcp 443`: it takes
+`100.95.234.17:443` first and Traefik then fails to bind 443 after a Docker
+restart.
 
 Dokploy 0.29 lacks the network-registry API: bootstrap the same labelled,
 internal/attachable Docker bridge once from the recorded app name before
