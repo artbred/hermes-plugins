@@ -8,8 +8,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-PORTS = {"api": 8642, "speech": 9120, "uploads": 9122, "push": 9123}
-BACKENDS = {"api": 8642, "speech": 9119, "uploads": 9121, "push": 9123}
+PORTS = {"api": 8642, "speech": 9120, "uploads": 9122, "push": 9123, "ui": 9124}
+BACKENDS = {"api": 8642, "speech": 9119, "uploads": 9121, "push": 9123, "ui": 9124}
 PIN = "nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d7702ba"
 
 
@@ -68,9 +68,22 @@ class Contract(unittest.TestCase):
 
     def test_nginx_routes_and_transparency(self):
         config = (ROOT / "nginx.conf").read_text()
-        routes = re.findall(r"listen (\d+);\s*location / \{\s*proxy_pass http://unix:/sockets/(\w+)\.sock;", config)
-        self.assertEqual({name: int(port) for port, name in routes}, PORTS)
-        self.assertEqual(len(routes), 4)
+        blocks = re.findall(r"server\s*\{\s*listen (\d+);\s*location / \{(.*?)\}\s*\}", config, re.S)
+        routes = {}
+        for port, body in blocks:
+            match = re.search(r"proxy_pass http://unix:/sockets/(\w+)\.sock;", body)
+            self.assertIsNotNone(match)
+            assert match is not None
+            routes[match.group(1)] = int(port)
+        self.assertEqual(routes, PORTS)
+        self.assertEqual(len(blocks), 5)
+        ui = next(body for port, body in blocks if port == "9124")
+        for line in ("proxy_set_header Host $http_host;", "proxy_set_header Authorization $http_authorization;",
+                     "proxy_set_header Upgrade $http_upgrade;", "proxy_set_header Connection $ui_connection_upgrade;"):
+            self.assertIn(line, ui)
+        for port, body in blocks:
+            if port != "9124":
+                self.assertNotIn("proxy_set_header Upgrade", body)
         self.assertNotRegex(config, r"(?:\d{1,3}\.){3}\d{1,3}")
         self.assertIn("proxy_set_header Host $http_host;", config)
         self.assertIn("proxy_set_header Authorization $http_authorization;", config)
@@ -112,6 +125,15 @@ class Contract(unittest.TestCase):
         # Numeric values are host name infrastructure only, never backend targets.
         for path in (ROOT / "backends").glob("*.conf"):
             self.assertNotRegex(path.read_text(), r"(?:\d{1,3}\.){3}\d{1,3}")
+
+    def test_ui_service_is_isolated_loopback_and_does_not_restart_messaging(self):
+        unit = (ROOT / "systemd/user/hermes-ui.service").read_text()
+        self.assertIn("--isolated --host 127.0.0.1 --port 9124", unit)
+        self.assertIn("HERMES_DASHBOARD_PUBLIC_URL=https://ui.sashakuzina.com", unit)
+        self.assertIn("EnvironmentFile=%h/.hermes/.env", unit)
+        self.assertIn("PartOf=hermes-dashboard.service", unit)
+        self.assertNotIn("hermes-gateway.service", unit)
+        self.assertNotIn("--insecure", unit)
 
     def test_hosts_patch_applies_only_to_staging(self):
         with tempfile.TemporaryDirectory(prefix="host-ingress-hosts-test-",

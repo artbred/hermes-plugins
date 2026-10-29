@@ -1,0 +1,31 @@
+http:
+  routers:
+    hermes-ui:
+      rule: Host(`ui.sashakuzina.com`)
+      entryPoints:
+        - websecure
+      middlewares:
+        - hermes-ui-tailnet
+      service: hermes-ui
+      tls:
+        certResolver: letsencrypt
+    hermes-ui-http:
+      rule: Host(`ui.sashakuzina.com`)
+      entryPoints:
+        - web
+      middlewares:
+        - hermes-ui-tailnet
+        - redirect-to-https
+      service: hermes-ui
+  middlewares:
+    hermes-ui-tailnet:
+      ipAllowList:
+        sourceRange:
+          - 100.64.0.0/10
+          - fd7a:115c:a1e0::/48
+  services:
+    hermes-ui:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://hermes-host-ingress:9124

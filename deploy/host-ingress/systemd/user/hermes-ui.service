@@ -1,0 +1,20 @@
+[Unit]
+Description=Authenticated tailnet Hermes web UI
+After=network-online.target hermes-dashboard.service
+Wants=network-online.target
+PartOf=hermes-dashboard.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/lib/hermes-agent
+EnvironmentFile=%h/.hermes/.env
+Environment=HERMES_DASHBOARD_PUBLIC_URL=https://ui.sashakuzina.com
+Environment=HERMES_DASHBOARD_BASIC_AUTH_USERNAME=artem
+ExecStart=/usr/local/bin/hermes dashboard --isolated --host 127.0.0.1 --port 9124 --no-open --skip-build
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+UMask=0077
+
+[Install]
+WantedBy=default.target

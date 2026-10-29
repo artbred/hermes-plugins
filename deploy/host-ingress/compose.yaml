@@ -27,4 +27,4 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    expose: ["8642", "9120", "9122", "9123"]
+    expose: ["8642", "9120", "9122", "9123", "9124"]

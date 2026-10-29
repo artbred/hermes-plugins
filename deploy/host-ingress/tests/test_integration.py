@@ -22,7 +22,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d7702ba"
-PORTS = {"api": 8642, "speech": 9120, "uploads": 9122, "push": 9123}
+PORTS = {"api": 8642, "speech": 9120, "uploads": 9122, "push": 9123, "ui": 9124}
 
 
 def run(*args, **kwargs):
@@ -37,6 +37,8 @@ def client():
                "X-Forwarded-For": "fixture-client", "X-Test-Identity": "preserved"}
     if request.get("auth", True):
         headers["Authorization"] = "Bearer fixture-only-not-a-credential"
+    if request.get("upgrade"):
+        headers.update({"Upgrade": "websocket", "Connection": "Upgrade"})
     started = time.monotonic()
     if request.get("upload"):
         total = 2 * 1024 * 1024 + 17
@@ -101,6 +103,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if "Authorization" not in self.headers:
             return self.reply(401, "upstream-auth-required", WWW_Authenticate='Bearer realm="fixture"')
+        if self.path == "/ws":
+            if self.headers.get("Upgrade") != "websocket":
+                return self.reply(400, "upgrade-required")
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.end_headers()
+            return
         if self.path == "/sse":
             first, second = b"data: first\n\n", b"data: second\n\n"
             self.send_response(200)
@@ -242,7 +252,7 @@ class Integration(unittest.TestCase):
                      str(Path(__file__).resolve()), "--client", input=json.dumps(request), timeout=12)
         return json.loads(result.stdout)
 
-    def test_01_missing_sockets_then_all_four_routes(self):
+    def test_01_missing_sockets_then_all_routes(self):
         self.assertEqual(self.initial_missing["status"], 502)
         for name in PORTS:
             with self.subTest(name=name):
@@ -322,6 +332,14 @@ class Integration(unittest.TestCase):
         self.assertNotEqual(denied.returncode, 0)
         self.assertEqual((self.base.stat().st_mode & 0o777), 0o700)
         self.assertEqual((self.socketdir.stat().st_mode & 0o777), 0o750)
+
+    def test_08_websocket_upgrade_is_enabled_only_for_ui(self):
+        response = self.request("ui", path="/ws", upgrade=True)
+        self.assertEqual(response["status"], 101)
+        self.assertEqual(response["headers"]["Upgrade"], "websocket")
+        for name in PORTS:
+            if name != "ui":
+                self.assertEqual(self.request(name, path="/ws", upgrade=True)["status"], 400)
 
 
 if __name__ == "__main__":
