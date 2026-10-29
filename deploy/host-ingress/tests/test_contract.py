@@ -135,6 +135,14 @@ class Contract(unittest.TestCase):
         self.assertNotIn("hermes-gateway.service", unit)
         self.assertNotIn("--insecure", unit)
 
+    def test_ui_router_keeps_narrow_direct_source_access_control(self):
+        route = (ROOT / "traefik/hermes-ui.yaml").read_text()
+        for expected in ("Host(`ui.sashakuzina.com`)", "100.64.0.0/10", "fd7a:115c:a1e0::/48",
+                         "172.23.0.1/32", "url: http://hermes-host-ingress:9124", "certResolver: letsencrypt"):
+            self.assertIn(expected, route)
+        for broad in ("172.16.0.0/12", "10.0.0.0/8", "0.0.0.0/0", "depth:", "excludedIPs:"):
+            self.assertNotIn(broad, route)
+
     def test_hosts_patch_applies_only_to_staging(self):
         with tempfile.TemporaryDirectory(prefix="host-ingress-hosts-test-",
                                         dir=os.environ.get("TMPDIR", "/root/.hermes/cache/scratch")) as temp:

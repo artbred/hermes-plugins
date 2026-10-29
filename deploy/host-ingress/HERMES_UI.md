@@ -25,6 +25,8 @@ The user service reads the active owner's `.env` with mode 0600. The native basi
 
 This single-user provider is intended for trusted/VPN access. Both the native sign-in and the direct-source tailnet allowlist are required; never replace them with injected legacy session tokens or by rewriting the browser's Origin to localhost.
 
+On this host, Tailscale forwarding into Docker is SNATed to the host-owned `docker_gwbridge` gateway, `172.23.0.1`. The router admits that exact /32 in addition to tailnet ranges, not all Docker/private CIDRs. Private peer access and public-origin denial (also with a forged X-Forwarded-For) must both pass after any networking change. A valid single-use native WebSocket ticket is itself an authentication credential; native acceptance does not additionally rely on Origin. Test rejection without credentials and ticket replay rather than claiming that a valid bearer ticket is rejected merely for a different Origin.
+
 ## Verification
 
 Run the contract, cutover and disposable integration suites:
@@ -33,4 +35,4 @@ Run the contract, cutover and disposable integration suites:
 HERMES_INGRESS_INTEGRATION=1 python3 -B -m unittest discover -s deploy/host-ingress/tests -v
 ```
 
-The UI-specific fixture proves HTTP transparency, authentication preservation, uploads, SSE and a WebSocket upgrade through the Unix transport, without enabling upgrades on legacy ports. Live acceptance additionally requires trusted HTTPS, native sign-in, protected Kanban API access, an authenticated WebSocket/ticket handshake, rejection of invalid credentials/cross-origin requests, public-origin denial even with forged forwarding headers, and unchanged legacy dashboard/messaging PIDs. Do not call a successful login-page GET a completed authenticated UI test.
+The UI-specific fixture proves HTTP transparency, authentication preservation, uploads, SSE and a WebSocket upgrade through the Unix transport, without enabling upgrades on legacy ports. Live acceptance additionally requires trusted HTTPS, native sign-in, protected Kanban API access, authenticated board/chat WebSocket handshakes, invalid-password refusal, unauthenticated cross-origin refusal and ticket-replay refusal, public-origin denial even with forged forwarding headers, and unchanged legacy dashboard/messaging PIDs. Do not call a successful login-page GET a completed authenticated UI test.

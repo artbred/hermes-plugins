@@ -23,6 +23,9 @@ http:
         sourceRange:
           - 100.64.0.0/10
           - fd7a:115c:a1e0::/48
+          # Tailscale forwarding to Docker is SNATed to this host-owned gateway.
+          # Public-origin traffic retains its external source and stays denied.
+          - 172.23.0.1/32
   services:
     hermes-ui:
       loadBalancer:
